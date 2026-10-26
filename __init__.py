@@ -5,7 +5,8 @@ The product photo is never redrawn: the model makes the place, the people and th
 around it, and the original pixels are put back on top.
 """
 from .ea_scene import VERSION
-from .ea_scene import routes  # noqa: F401  (registers the API, then the page)
+from .ea_scene import api  # noqa: F401  the API first,
+from .ea_scene import page  # noqa: F401  then the page and data files, whose routes catch the rest of /ea/
 from .ea_scene.nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'VERSION']

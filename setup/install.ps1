@@ -208,7 +208,7 @@ try {
   if ($probe[2] -ne 'True') { Stop-Setup 'comfyui' 'PyTorch cannot reach the GPU. Updating the NVIDIA driver usually fixes this.' }
 
   # Models and the generator live beside ComfyUI, not inside it, so ComfyUI can be replaced freely.
-  foreach ($d in @('checkpoints', 'diffusion_models', 'text_encoders', 'vae', 'loras')) {
+  foreach ($d in @('checkpoints', 'diffusion_models', 'text_encoders', 'vae', 'loras', 'background_removal', 'upscale_models')) {
     New-Item -ItemType Directory -Force -Path (Join-Path $Models $d) | Out-Null
   }
   $yaml = @"
@@ -220,6 +220,8 @@ empirical_armory:
     text_encoders: models/text_encoders
     vae: models/vae
     loras: models/loras
+    background_removal: models/background_removal
+    upscale_models: models/upscale_models
     custom_nodes: nodes
 "@
   Set-Content -LiteralPath (Join-Path $Portable 'ComfyUI\extra_model_paths.yaml') -Value $yaml -Encoding Ascii
