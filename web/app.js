@@ -674,8 +674,9 @@ function renderCompareSetup() {
 }
 async function loadBatches() {
   const r = await api('/ea/api/results?limit=2000');
-  const batches = [...new Set(r.results.map((x) => x.batch).filter((b) => b && b.startsWith('cmp-')))];
-  $('#cmpBatches').innerHTML = batches.map((b) => `<button type="button" data-v="${esc(b)}">${esc(b.replace('cmp-', '').replace(/T/, ' '))}</button>`).join('') || '<span class="hint">None yet.</span>';
+  const batches = [...new Set(r.results.map((x) => x.batch).filter((b) => b && /^cmp\d*-/.test(b)))];
+  const label = (b) => b.startsWith('cmp-') ? b.slice(4).replace(/T/, ' ') : b.replace(/^(cmp\d+)-/, '$1 · ');
+  $('#cmpBatches').innerHTML = batches.map((b) => `<button type="button" data-v="${esc(b)}">${esc(label(b))}</button>`).join('') || '<span class="hint">None yet.</span>';
   $('#cmpBatches').onclick = (e) => { const b = e.target.closest('button'); if (b) showBatch(b.dataset.v, r.results); };
 }
 function showBatch(batch, results) {
