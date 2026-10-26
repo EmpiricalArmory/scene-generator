@@ -273,7 +273,8 @@ def _natural_subject(s, noun, kind, views):
     people = s.get('people', 'none')
     side = s.get('side', 'right')
     framing = {'close': 'framed close', 'half': 'framed from the waist up', 'full': 'the whole figure in the frame'}.get(s.get('framing', 'half'))
-    whole = f'the whole {noun}, from pommel to point, is in the frame' if kind == 'instrument' else f'the whole {noun} is in the frame'
+    whole = (f'the whole {noun}, from pommel to point, is in the frame, with a little space beyond the point and the pommel'
+             if kind == 'instrument' else f'the whole {noun} is in the frame')
     kit = kit_for(kind)
     if pose == 'held-up':
         if people in ('hand', 'hands', 'none'):

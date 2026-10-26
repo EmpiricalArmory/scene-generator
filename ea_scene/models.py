@@ -44,7 +44,7 @@ FAMILIES = {
         'quality': {'final': {'steps': 40, 'cfg': 4.0}, 'draft': {'steps': 8, 'cfg': 1.0}},
         'max_refs': 2,
         'pictures': 3,
-        'first_pass': {'closeups': True},
+        'first_pass': {'closeups': False},      # close-ups pull its framing in close and cut the product off
         'detail_mp': {'final': 2.0, 'draft': 1.2},
     },
     'hidream': {
