@@ -222,6 +222,47 @@ class EADetailCrop:
         return (_image_tensor(crop), _mask_tensor(mm), json.dumps(info))
 
 
+class EAPartMask:
+    """The parts SAM 3 found (one mask each, as SAM 3 Detect gives them with individual masks), joined, kept
+    only where each is a part of the whole: a find bigger than `max_share` of the whole is dropped (SAM 3 can
+    answer "sword hilt" with the whole sword); the whole between what's left is added (the grip between a cross
+    and a pommel), and all of it trimmed to the whole, grown a little, so a hand on the grip stays out of it."""
+    CATEGORY = 'Empirical Armory'
+    RETURN_TYPES = ('MASK',)
+    FUNCTION = 'join'
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'parts': ('MASK',), 'whole': ('MASK',),
+                             'max_share': ('FLOAT', {'default': 0.45, 'min': 0.05, 'max': 1.0, 'step': 0.05})}}
+
+    def join(self, parts, whole, max_share=0.45):
+        w = _first_mask(whole, *whole.shape[-2:]) > 0.5
+        H, W = w.shape
+        P = parts.detach().float().cpu().numpy()
+        if P.ndim == 2:
+            P = P[None]
+        P = P.reshape(-1, P.shape[-2], P.shape[-1]) if P.size else np.zeros((0, H, W), np.float32)
+        area = float(w.sum())
+        keep = np.zeros((H, W), bool)
+        for m in P:
+            if m.shape != (H, W):
+                m = resize(m.astype(np.float32), W, H, resample=2)
+            m = m > 0.5
+            a = float(m.sum())
+            if a > 0 and (area == 0 or a <= max_share * area):
+                keep |= m
+        if area > 0 and keep.any():
+            ys, xs = np.nonzero(w)
+            size = max(xs.max() - xs.min(), ys.max() - ys.min()) + 1
+            # the whole between the parts found (a grip between its cross and pommel), then trimmed to the whole
+            ky, kx = np.nonzero(keep)
+            between = np.zeros_like(keep)
+            between[ky.min():ky.max() + 1, kx.min():kx.max() + 1] = True
+            keep = (keep | (w & between)) & imaging.dilate(w, max(3, int(0.02 * size)))
+        return (_mask_tensor(keep.astype(np.float32)),)
+
+
 class EADetailPaste:
     """The picture at width x height (resized if it isn't), with the redrawn product blended back in; and a
     log of the passes so far (what each looked for, whether it was found, and where), kept with the result."""
@@ -445,6 +486,7 @@ NODE_CLASS_MAPPINGS = {
     'EAQwenEditEncode': EAQwenEditEncode,
     'EADetailCrop': EADetailCrop,
     'EADetailPaste': EADetailPaste,
+    'EAPartMask': EAPartMask,
     'EAFinish': EAFinish,
     'EAProductCutout': EAProductCutout,
     'EAProductPicture': EAProductPicture,
@@ -460,6 +502,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     'EAQwenEditEncode': 'EA Qwen Edit Encode',
     'EADetailCrop': 'EA Detail Crop',
     'EADetailPaste': 'EA Detail Paste',
+    'EAPartMask': 'EA Part Mask',
     'EAFinish': 'EA Finish',
     'EAProductCutout': 'EA Product Cut-out',
     'EAProductPicture': 'EA Product Picture',

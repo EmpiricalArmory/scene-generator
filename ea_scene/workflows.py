@@ -178,13 +178,20 @@ class Kit:
         return out(g.add('VAEDecode', samples=out(s, 0), vae=self.vae))
 
 
-def sam_find(g, image, term, threshold=0.4):
-    """SAM 3's mask of `term` in a picture (the union of what it finds)."""
+def sam_find(g, image, term, threshold=0.4, individual=False):
+    """SAM 3's mask of `term` in a picture: the union of what it finds, or one mask per find."""
     ck = g.once('sam3', lambda: g.add('CheckpointLoaderSimple', ckpt_name=SAM3[1]))
     cond = g.once('sam3-text:' + term, lambda: g.add('CLIPTextEncode', clip=out(ck, 1), text=term))
     det = g.add('SAM3_Detect', model=out(ck, 0), image=image, conditioning=out(cond), threshold=float(threshold),
-                refine_iterations=2, individual_masks=False)
+                refine_iterations=2, individual_masks=bool(individual))
     return out(det, 0)
+
+
+def part_find(g, image, parts, whole):
+    """SAM 3's finds of `parts` (comma-separated) in a picture, joined where each is a part of `whole` (found
+    there too) and not the whole itself."""
+    return out(g.add('EAPartMask', parts=sam_find(g, image, parts, individual=True), whole=sam_find(g, image, whole),
+                     max_share=0.45))
 
 
 def seedvr2(g, image, width, height, seed):
@@ -201,13 +208,14 @@ def seedvr2(g, image, width, height, seed):
     return out(g.add('SeedVR2PostProcessing', images=out(dec), original_resized_images=out(r), color_correction_method='lab'))
 
 
-def detail_pass(g, kit, image, term, settings, photos, neg, seed, ow, oh, base=None, margin=0.1, max_aspect=2.0, log=None):
+def detail_pass(g, kit, image, term, settings, photos, neg, seed, ow, oh, base=None, margin=0.1, max_aspect=2.0, log=None,
+                part_of=None):
     """Find `term` in the picture, cut the area around it out and enlarge it, redraw it at part strength with
     the product's photos beside it, and blend it back into `base` (the picture itself if not given) at the
     output size, keeping the picture's own colour under the redrawn light, shade and detail. Returns the picture
     and the passes' log."""
     strength = float(settings['strength'])
-    found = sam_find(g, image, term)
+    found = part_find(g, image, term, part_of) if part_of else sam_find(g, image, term)
     sizes = kit.F.get('sizes')                       # HiDream-O1 draws at its own sizes only
     crop = g.add('EADetailCrop', image=image, mask=found, megapixels=float(settings['megapixels']),
                  margin=float(margin), max_aspect=float(max_aspect), sizes=json.dumps(sizes) if sizes else '')
@@ -253,7 +261,8 @@ def build(job, variation=0, status=None):
             hilt = det.get('hilt') or {}
             if hilt.get('on'):
                 final, log = detail_pass(g, kit, final, hilt['find'], hilt, [photo(i) for i in hilt['view_index'] if i < n_all],
-                                         neg, seed + 2 * DETAIL_SEED, ow, oh, margin=0.15, max_aspect=1.6, log=log)
+                                         neg, seed + 2 * DETAIL_SEED, ow, oh, margin=0.15, max_aspect=1.6, log=log,
+                                         part_of=job['find'])
         else:
             final = seedvr2(g, first, ow, oh, seed) if up else first
         extra = {'mask': sam_find(g, final, job['find'])} if job.get('sam') else {}
