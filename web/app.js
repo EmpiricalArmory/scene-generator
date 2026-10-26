@@ -470,7 +470,7 @@ function renderModels() {
     const m = st[f] || { name: f };
     const missing = m.ready ? '' : ' · not downloaded yet';
     return `<label class="mopt${m.ready ? '' : ' off'}"><input type="radio" name="family" value="${f}" ${f === S.family ? 'checked' : ''} ${m.ready ? '' : 'disabled'}>
-      <span class="mn">${esc(m.name)}${missing}</span><span class="ml">${esc(m.licence || '')}</span></label>`;
+      <span class="mn">${esc(m.name)}${missing}</span>${m.note ? `<span class="ml">${esc(m.note)}</span>` : ''}<span class="ml">${esc(m.licence || '')}</span></label>`;
   }).join('');
   for (const r of $$('#modelPick input')) r.addEventListener('change', () => { S.family = r.value; store('family', S.family); renderStylePick(); updatePrompt(); updateGenerate(); });
   updateGenerate();

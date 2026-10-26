@@ -26,6 +26,7 @@ FAMILIES = {
         'max_refs': 9,
         'pictures': 10,          # product photos and style references together
         'first_pass': {'closeups': True},
+        'note': 'About 4 to 5 minutes a picture on an RTX 4090. Draws from all your photos, close-ups included.',
         'detail_mp': {'final': 4.0, 'draft': 1.5},
     },
     'qwen': {
@@ -45,6 +46,8 @@ FAMILIES = {
         'max_refs': 2,
         'pictures': 3,
         'first_pass': {'closeups': False},      # close-ups pull its framing in close and cut the product off
+        'note': 'About 16 minutes a picture (it doesn\'t fit in 24 GB, so it streams). Draws from up to 3 whole views; '
+                'the close-ups go to the detail pass.',
         'detail_mp': {'final': 2.0, 'draft': 1.2},
     },
     'hidream': {
@@ -62,6 +65,8 @@ FAMILIES = {
         # given several photos of one product, HiDream-O1 lays them out as a collage of panels: its first pass
         # gets the main photo (and one style reference at most); the close-ups go to the detail passes
         'first_pass': {'views': 1, 'closeups': False, 'refs': 1},
+        'note': 'About 8 to 9 minutes a picture. Draws from the main photo only (given more, it lays them out as a '
+                'collage); the close-ups go to the detail pass.',
         'detail_mp': {'final': 4.0, 'draft': 3.0},
     },
 }
@@ -125,7 +130,8 @@ def status():
         need = {k: _have(*v) for k, v in f['files'].items()}
         opt = {k: _have(*v) for k, v in f.get('optional', {}).items()}
         out[key] = {'name': f['name'], 'maker': f['maker'], 'licence': f['licence'], 'ready': all(need.values()),
-                    'files': need, 'optional': opt, 'max_refs': f['max_refs'], 'pictures': f['pictures']}
+                    'files': need, 'optional': opt, 'max_refs': f['max_refs'], 'pictures': f['pictures'],
+                    'note': f.get('note', '')}
     out['_helpers'] = {k: {'label': h['label'], 'ready': have_helper(k), 'licence': h['licence'],
                            'size': sum(x['size'] for x in helper_files(h))} for k, h in HELPERS.items()}
     return out
