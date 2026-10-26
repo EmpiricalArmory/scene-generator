@@ -87,12 +87,12 @@ def _photo_name(src_path, original_name):
 
 
 def create(src_path, name, kind='other', noun='', credit=None, original_name=''):
+    rgb = load_rgb(src_path)                       # read it before anything is saved
     pid = new_id('p')
     d = folder(pid)
     os.makedirs(d, exist_ok=True)
     photo = _photo_name(src_path, original_name)
     shutil.copyfile(src_path, os.path.join(d, photo))
-    rgb = load_rgb(os.path.join(d, photo))
     p = {
         'id': pid, 'name': name or os.path.splitext(original_name or 'Product')[0], 'kind': kind if kind in KINDS else 'other',
         'noun': noun or '', 'materials': '', 'find': '', 'photo': photo, 'size': [int(rgb.shape[1]), int(rgb.shape[0])],
@@ -346,12 +346,15 @@ def add_view(pid, src_path, original_name='', made='photo', label='', source=Non
     p = load(pid)
     if len(p['views']) >= MAX_VIEWS:
         raise ValueError(f'A product can have up to {MAX_VIEWS + 1} photos. Remove one first.')
+    try:
+        rgb = load_rgb(src_path)                   # read it before anything is saved
+    except Exception:
+        raise ValueError('That file could not be read as a picture.')
     vid = new_id('v')
     d = view_folder(pid, vid)
     os.makedirs(d, exist_ok=True)
     photo = _photo_name(src_path, original_name)
     shutil.copyfile(src_path, os.path.join(d, photo))
-    rgb = load_rgb(os.path.join(d, photo))
     v = {'id': vid, 'photo': photo, 'made': made if made in ('photo', 'model') else 'photo', 'label': label or '',
          'use': True, 'size': [int(rgb.shape[1]), int(rgb.shape[0])], 'created': now_iso(), 'cutout': None,
          'source': source, 'rev': 0}
