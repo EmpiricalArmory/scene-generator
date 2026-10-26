@@ -66,6 +66,9 @@ HELPERS = {
     'sam3': {'label': 'SAM 3.1 (select parts by name or by clicking)', 'folder': 'checkpoints', 'file': 'sam3.1_multiplex_fp16.safetensors',
              'url': 'https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors',
              'size': 1745546848, 'sha256': '9ba99c92703c2e8b4f47de2d34a539bb8e18923049e238b780d70dbe6368eb03', 'licence': 'SAM License (commercial use allowed)'},
+    'gemma4': {'label': 'Gemma 4 E4B (writes captions for training)', 'folder': 'text_encoders', 'file': 'gemma4_e4b_it_fp8_scaled.safetensors',
+               'url': 'https://huggingface.co/Comfy-Org/gemma-4/resolve/main/text_encoders/gemma4_e4b_it_fp8_scaled.safetensors',
+               'size': 9057782194, 'sha256': 'bf0b4fa2e41a25684dc9e9b256cd505564f02fed09be3da95ce024e653e2c52b', 'licence': 'Apache 2.0'},
 }
 
 

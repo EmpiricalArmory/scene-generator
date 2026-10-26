@@ -17,6 +17,7 @@ const S = {
   options: null, status: null, products: [], product: null, references: [],
   place: { aspect: '4:5', cx: 0.5, cy: 0.5, length: 0.8, rotation: 0, flip: false },
   scene: { preset: 'cover', pose: 'held-up', people: 'hand', place: 'brick', light: 'overcast', height: 'eye', lens: '85', aperture: '2.8', side: 'right', framing: 'half', extra: '', place_text: '' },
+  style: null, styles: [],
   custom: false, customText: '', family: null, quality: 'final', variations: 2, seed: '', mode: 'exact', outLong: 2400, refs: [],
   cards: [],
 };
@@ -337,7 +338,7 @@ function renderModels() {
     return `<label class="mopt${m.ready ? '' : ' off'}"><input type="radio" name="family" value="${f}" ${f === S.family ? 'checked' : ''} ${m.ready ? '' : 'disabled'}>
       <span class="mn">${esc(m.name)}${missing}</span><span class="ml">${esc(m.licence || '')}</span></label>`;
   }).join('');
-  for (const r of $$('#modelPick input')) r.addEventListener('change', () => { S.family = r.value; store('family', S.family); updatePrompt(); updateGenerate(); });
+  for (const r of $$('#modelPick input')) r.addEventListener('change', () => { S.family = r.value; store('family', S.family); renderStylePick(); updatePrompt(); updateGenerate(); });
   updateGenerate();
 }
 function updateGenerate() {
@@ -363,7 +364,7 @@ function request(extra = {}) {
   return {
     product: S.product.id, place: S.place, scene: S.scene, family: S.family, quality: S.quality,
     variations: S.variations, seed: S.seed === '' ? null : +S.seed, product_mode: S.mode, output_long: S.outLong,
-    refs: S.refs, prompt: S.custom ? S.customText : null, ...extra,
+    refs: S.refs, prompt: S.custom ? S.customText : null, style: S.style, ...extra,
   };
 }
 
@@ -536,6 +537,7 @@ $('#btnCompare').addEventListener('click', async () => {
 const RIGHTS = { own: 'My own photograph', cc0: 'Public domain or CC0', 'cc-by': 'Creative Commons with credit', licensed: 'Licensed for this use', unknown: 'Unknown: not for training' };
 async function loadReferences() {
   S.references = (await api('/ea/api/references')).references;
+  loadTraining();
   renderRefPick();
   $('#refList').innerHTML = S.references.map((r) => `<div class="ref" data-id="${r.id}">
     <img src="${dataUrl(`references/${r.id}/thumb.jpg`)}" alt="">
@@ -546,6 +548,7 @@ async function loadReferences() {
       <input data-k="source" value="${esc(r.source)}" placeholder="Where it came from (a link)">
       <select data-k="rights">${Object.entries(RIGHTS).map(([k, l]) => `<option value="${k}" ${k === r.rights ? 'selected' : ''}>${l}</option>`).join('')}</select>
     </div>
+    <textarea class="cap" data-k="caption" placeholder="Caption for training: what the picture shows, its light and camera">${esc(r.caption || '')}</textarea>
     <div class="acts"><label class="chk mini"><input type="checkbox" data-k="train" ${r.train ? 'checked' : ''} ${r.rights === 'unknown' ? 'disabled' : ''}> Use for training</label>
       <button class="btn small" type="button" data-del>Remove</button></div></div>`).join('');
 }
@@ -560,12 +563,106 @@ $('#refList').addEventListener('click', async (e) => {
   if (!confirm('Remove this reference?')) return;
   await api('/ea/api/references/' + card.dataset.id, { method: 'DELETE' }); loadReferences();
 });
+let finder = { q: '', page: 1, pages: 1, items: [] };
+async function findOpen(more = false) {
+  const q = $('#finderQ').value.trim(); if (!q) return;
+  if (!more) finder = { q, page: 1, pages: 1, items: [] }; else finder.page += 1;
+  $('#finderInfo').textContent = 'Searching…';
+  try {
+    const r = await api(`/ea/api/openverse?q=${encodeURIComponent(q)}&page=${finder.page}`);
+    finder.items.push(...r.results); finder.pages = r.pages;
+    $('#finderInfo').textContent = `${r.count} found`;
+    $('#finderMore').hidden = finder.page >= finder.pages;
+    $('#finds').innerHTML = finder.items.map((x, i) => `<div class="find"><img loading="lazy" src="${esc(x.thumb)}" alt="">
+      <span class="t" title="${esc(x.title)}">${esc(x.title || 'Untitled')}</span>
+      <span>${esc(x.creator || 'Unknown')} · ${esc(x.licence)} · <a href="${esc(x.source)}" target="_blank" rel="noopener">page</a></span>
+      <button class="btn small" type="button" data-i="${i}">Add</button></div>`).join('');
+  } catch (e) { $('#finderInfo').textContent = e.message; }
+}
+$('#finderForm').addEventListener('submit', (e) => { e.preventDefault(); findOpen(false); });
+$('#finderMore').addEventListener('click', () => findOpen(true));
+$('#finds').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-i]'); if (!b) return;
+  b.disabled = true; b.textContent = 'Adding…';
+  try { await api('/ea/api/references/import', { json: finder.items[+b.dataset.i] }); b.textContent = 'Added'; loadReferences(); }
+  catch (err) { b.disabled = false; b.textContent = 'Add'; toast(err.message, true); }
+});
 $('#fileRefs').addEventListener('change', async (e) => {
   for (const f of e.target.files) {
     const fd = new FormData(); fd.append('file', f, f.name); fd.append('title', f.name.replace(/\.[^.]+$/, '')); fd.append('rights', 'unknown');
     try { await api('/ea/api/references', { method: 'POST', body: fd }); } catch (err) { toast(err.message, true); }
   }
   e.target.value = ''; loadReferences();
+});
+
+// ---------------------------------------------------------------- training a style
+let T = { sets: [], loras: [], caption_ready: false, usable: 0 };
+async function loadTraining() {
+  try { T = await api('/ea/api/training'); } catch { return; }
+  S.styles = T.loras;
+  const st = S.status?.models || {};
+  $('#trainCount').textContent = `${T.usable} picture${T.usable === 1 ? '' : 's'} can be used for training (a right recorded and "Use for training" ticked).`;
+  $('#trainBase').innerHTML = Object.entries(T.bases).map(([k, n]) => `<option value="${k}" ${st[k]?.ready ? '' : 'disabled'}>${esc(n)}${st[k]?.ready ? '' : ' (not downloaded)'}</option>`).join('');
+  $('#captionState').textContent = T.caption_ready ? '' : 'Captions need the Gemma 4 helper (Models, Helpers).';
+  $('#trainedList').innerHTML = T.sets.map((t) => `<div class="trained" data-id="${t.id}"><span><strong>${esc(t.name)}</strong> · ${esc(T.bases[t.base] || t.base)} · ${t.items.length} pictures · ${t.steps} steps${t.soft ? ` · <span class="hint" title="Enlarged more than 1.5 times to the model's training size; they can teach softness">${t.soft} small</span>` : ''}</span>
+    <span class="hint">${t.state === 'done' ? 'Trained: ' + esc(t.lora) : t.state === 'running' ? 'Training…' : 'Not trained yet'}</span>
+    <span>${t.state !== 'done' ? '<button class="btn small" type="button" data-run>Train</button>' : ''} <button class="btn small" type="button" data-del>Remove</button></span></div>`).join('');
+  renderStylePick();
+}
+function renderStylePick() {
+  const list = (S.styles || []).filter((x) => x.base === S.family);
+  $('#rowStyle').hidden = !list.length;
+  $('#selStyle').innerHTML = '<option value="">None</option>' + list.map((x) => `<option value="${esc(x.lora)}" ${S.style?.lora === x.lora ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
+  if (S.style && !list.find((x) => x.lora === S.style.lora)) S.style = null;
+}
+$('#selStyle').addEventListener('change', (e) => {
+  const x = S.styles.find((y) => y.lora === e.target.value);
+  S.style = x ? { lora: x.lora, base: x.base, trigger: x.trigger, strength: +$('#inStyleStrength').value } : null;
+});
+$('#inStyleStrength').addEventListener('input', (e) => { $('#outStyleStrength').textContent = e.target.value; if (S.style) S.style.strength = +e.target.value; });
+$('#btnCaptions').addEventListener('click', async () => {
+  if (!T.caption_ready) { toast('Download the Gemma 4 helper under Models first.', true); return; }
+  const todo = S.references.filter((r) => r.train && r.rights !== 'unknown' && !(r.caption || '').trim());
+  if (!todo.length) { toast('Every picture for training has a caption.'); return; }
+  let done = 0;
+  $('#captionState').textContent = `Writing captions: 0 of ${todo.length}`;
+  for (const r of todo) {
+    try {
+      const g = await api(`/ea/api/references/${r.id}/caption`, { json: {} });
+      await comfy.run(g.prompt);
+      done++; $('#captionState').textContent = `Writing captions: ${done} of ${todo.length}`;
+    } catch (e) { toast(e.message, true); break; }
+  }
+  $('#captionState').textContent = `${done} caption${done === 1 ? '' : 's'} written. Read them through and correct what's wrong.`;
+  loadReferences();
+});
+async function startTraining(prompt, set) {
+  const card = $(`#trainedList .trained[data-id="${set.id}"]`);
+  const state = card ? $('.hint', card) : $('#trainState');
+  const bar = document.createElement('span'); bar.className = 'bar'; bar.innerHTML = '<span></span>';
+  card?.insertBefore(bar, state);
+  try {
+    await comfy.run(prompt, {
+      onNode: (node) => { const cls = prompt[node]?.class_type; if (cls === 'MakeTrainingDataset') state.textContent = 'Preparing the pictures'; if (cls?.includes('Loader')) state.textContent = 'Loading the model'; },
+      onProgress: (v, m) => { state.textContent = `Training: step ${v} of ${m}`; $('span', bar).style.width = ((100 * v) / m).toFixed(1) + '%'; },
+    });
+    toast('The style is trained. Pick it under Make, in Model.');
+  } catch (e) { toast('Training stopped: ' + e.message, true); }
+  loadTraining();
+}
+$('#btnTrain').addEventListener('click', async () => {
+  const body = { name: $('#trainName').value.trim() || 'EA scenes', base: $('#trainBase').value };
+  if ($('#trainSteps').value) body.steps = +$('#trainSteps').value;
+  try {
+    const r = await api('/ea/api/training', { json: body });
+    await loadTraining();
+    startTraining(r.prompt, r.set);
+  } catch (e) { toast(e.message, true); }
+});
+$('#trainedList').addEventListener('click', async (e) => {
+  const card = e.target.closest('.trained'); if (!card) return;
+  if (e.target.matches('[data-del]') && confirm('Remove this training set? A trained style file stays in models/loras/ea.')) { await api('/ea/api/training/' + card.dataset.id, { method: 'DELETE' }); loadTraining(); }
+  if (e.target.matches('[data-run]')) { const r = await api(`/ea/api/training/${card.dataset.id}/run`, { json: {} }); startTraining(r.prompt, r.set); }
 });
 
 // ---------------------------------------------------------------- models and status

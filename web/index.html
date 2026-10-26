@@ -117,6 +117,9 @@
       <div class="models" id="modelPick"></div>
       <div class="row"><span class="lab">Quality</span><div class="seg" id="segQuality">
         <button type="button" data-v="final" aria-pressed="true">Final</button><button type="button" data-v="draft">Draft (faster)</button></div></div>
+      <div class="row" id="rowStyle" hidden><span class="lab">Trained style</span>
+        <div class="row inline"><select id="selStyle"><option value="">None</option></select>
+        <label class="mini">Strength <input type="range" id="inStyleStrength" min="0" max="1.5" step="0.05" value="0.8"><output id="outStyleStrength">0.8</output></label></div></div>
       <div class="row inline">
         <label class="mini">Variations <select id="selVariations"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
         <label class="mini">Seed <input type="text" id="inSeed" placeholder="random" inputmode="numeric" size="10"></label>
@@ -168,7 +171,31 @@
     </div>
     <label class="btn primary">Add pictures<input type="file" id="fileRefs" accept="image/*" multiple hidden></label>
   </div>
-  <div class="refs" id="refList"></div>
+  <div class="refs-body">
+    <details class="finder" id="finder">
+      <summary>Find openly licensed photographs</summary>
+      <p class="hint">Searches Openverse (Wikimedia Commons, Flickr and others) for pictures you may use commercially and change: CC0, public domain, CC BY and CC BY-SA. Adding one keeps its creator, licence and link. Check each page before you rely on it.</p>
+      <form class="row inline" id="finderForm"><input type="search" id="finderQ" class="txt" placeholder="e.g. longsword fencing, fencing mask, HEMA tournament" style="max-width:420px">
+        <button class="btn small" type="submit">Search</button><span class="hint" id="finderInfo"></span>
+        <button class="btn small" type="button" id="finderMore" hidden>More</button></form>
+      <div class="finds" id="finds"></div>
+    </details>
+    <details class="finder" id="trainer" open>
+      <summary>Train a style</summary>
+      <p class="hint">A style teaches HiDream-O1 or Qwen-Image-Edit the look of your references: the light, the places, the framing. It needs at least 5 pictures you may use, ideally 20 to 60, each with a caption that describes it. FLUX 3 isn't offered here: its free licence does not cover training.</p>
+      <p class="note" id="trainCount"></p>
+      <div class="row inline"><button class="btn small" type="button" id="btnCaptions">Write the missing captions</button><span class="hint" id="captionState"></span></div>
+      <div class="row inline">
+        <label class="mini">Name <input type="text" id="trainName" value="EA scenes" size="16"></label>
+        <label class="mini">Model <select id="trainBase"></select></label>
+        <label class="mini">Steps <input type="number" id="trainSteps" min="200" max="10000" step="100" placeholder="auto"></label>
+        <button class="btn small primary" type="button" id="btnTrain">Train</button>
+        <span class="hint" id="trainState"></span>
+      </div>
+      <div id="trainedList"></div>
+    </details>
+    <div class="refs" id="refList"></div>
+  </div>
 </main>
 
 <!-- ============================================================ MODELS -->

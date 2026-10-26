@@ -17,7 +17,7 @@ import torch
 import comfy.utils
 import node_helpers
 
-from . import jobs, products, paths
+from . import jobs, paths, products, references, training
 from .util import load_gray, load_rgb, read_json
 
 
@@ -149,12 +149,86 @@ class EAProductCutout:
         return {'ui': {'ea_product': [info]}}
 
 
+class EARefImage:
+    CATEGORY = 'Empirical Armory'
+    RETURN_TYPES = ('IMAGE',)
+    FUNCTION = 'load'
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'ref': ('STRING', {'default': ''})}}
+
+    def load(self, ref):
+        r = read_json(os.path.join(references.folder(ref), 'reference.json'))
+        rgb = load_rgb(os.path.join(references.folder(ref), r['file']))
+        h, w = rgb.shape[:2]
+        s = min(1.0, (1.5 * 1024 * 1024 / (h * w)) ** 0.5)
+        if s < 1:
+            from .util import resize
+            rgb = resize(rgb, w * s, h * s)
+        return (_image_tensor(rgb),)
+
+
+class EASaveCaption:
+    CATEGORY = 'Empirical Armory'
+    RETURN_TYPES = ()
+    FUNCTION = 'save'
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'ref': ('STRING', {'default': ''}), 'text': ('STRING', {'forceInput': True}),
+                             'trigger': ('STRING', {'default': training.TRIGGER})}}
+
+    def save(self, ref, text, trigger):
+        cap = ' '.join(str(text).split())
+        if trigger and not cap.lower().startswith(trigger.lower()):
+            cap = f'{trigger}, {cap}'
+        references.update(ref, {'caption': cap})
+        return {'ui': {'ea_caption': [{'ref': ref, 'caption': cap}]}}
+
+
+class EATrainingImages:
+    CATEGORY = 'Empirical Armory'
+    RETURN_TYPES = ('IMAGE', 'STRING')
+    RETURN_NAMES = ('images', 'texts')
+    OUTPUT_IS_LIST = (True, True)
+    FUNCTION = 'load'
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'set': ('STRING', {'default': ''})}}
+
+    def load(self, set):
+        imgs, texts = training.images_and_texts(set)
+        return ([_image_tensor(i) for i in imgs], texts)
+
+
+class EASaveLoRA:
+    CATEGORY = 'Empirical Armory'
+    RETURN_TYPES = ()
+    FUNCTION = 'save'
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'lora': ('LORA_MODEL',), 'set': ('STRING', {'default': ''})},
+                'optional': {'steps': ('INT', {'forceInput': True})}}
+
+    def save(self, lora, set, steps=None):
+        return {'ui': {'ea_training': [training.save_lora(set, lora, steps)]}}
+
+
 NODE_CLASS_MAPPINGS = {
     'EAJobImage': EAJobImage,
     'EAJobMask': EAJobMask,
     'EAQwenEditEncode': EAQwenEditEncode,
     'EAFinish': EAFinish,
     'EAProductCutout': EAProductCutout,
+    'EARefImage': EARefImage,
+    'EASaveCaption': EASaveCaption,
+    'EATrainingImages': EATrainingImages,
+    'EASaveLoRA': EASaveLoRA,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     'EAJobImage': 'EA Job Image',
@@ -162,4 +236,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     'EAQwenEditEncode': 'EA Qwen Edit Encode',
     'EAFinish': 'EA Finish (product pasted back)',
     'EAProductCutout': 'EA Product Cut-out',
+    'EARefImage': 'EA Reference Picture',
+    'EASaveCaption': 'EA Save Caption',
+    'EATrainingImages': 'EA Training Set',
+    'EASaveLoRA': 'EA Save Trained Style',
 }

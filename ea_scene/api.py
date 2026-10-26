@@ -12,7 +12,7 @@ import numpy as np
 from aiohttp import web
 import server
 
-from . import VERSION, composite, downloads, jobs, models, paths, products, references, scene, workflows
+from . import VERSION, composite, downloads, jobs, models, paths, products, references, scene, training, workflows
 from .util import load_gray, read_json
 
 routes = server.PromptServer.instance.routes
@@ -300,6 +300,26 @@ async def reference_add(request):
     return web.json_response({'reference': r})
 
 
+@routes.get('/ea/api/openverse')
+async def openverse_search(request):
+    q = request.query.get('q', '').strip()
+    if not q:
+        return web.json_response({'results': [], 'pages': 0, 'count': 0})
+    try:
+        return web.json_response(await in_thread(references.search_open, q, int(request.query.get('page', 1))))
+    except Exception as e:
+        return fail('The search did not answer: ' + str(e), 502)
+
+
+@routes.post('/ea/api/references/import')
+async def reference_import(request):
+    body = await request.json()
+    try:
+        return web.json_response({'reference': await in_thread(references.import_open, body)})
+    except Exception as e:
+        return fail('Could not fetch that picture: ' + str(e), 502)
+
+
 @routes.post('/ea/api/references/{rid}')
 async def reference_update(request):
     body = await request.json()
@@ -312,6 +332,61 @@ async def reference_update(request):
 @routes.delete('/ea/api/references/{rid}')
 async def reference_delete(request):
     await in_thread(references.remove, request.match_info['rid'])
+    return web.json_response({'ok': True})
+
+
+# ---------------------------------------------------------------- captions and training
+
+@routes.post('/ea/api/references/{rid}/caption')
+async def reference_caption(request):
+    if not models._have(*training.CAPTION_MODEL):
+        return fail('Captions need the Gemma 4 helper: download it under Models first.')
+    body = await request.json() if request.can_read_body else {}
+    return web.json_response({'prompt': training.caption_graph(request.match_info['rid'], body.get('trigger') or training.TRIGGER)})
+
+
+def _trained_loras():
+    out = []
+    for s in training.all_sets():
+        if s.get('state') == 'done' and s.get('lora') and models._have('loras', s['lora']):
+            out.append({'set': s['id'], 'name': s['name'], 'base': s['base'], 'lora': s['lora'], 'trigger': s['trigger']})
+    return out
+
+
+@routes.get('/ea/api/training')
+async def training_list(request):
+    return web.json_response({'sets': training.all_sets(), 'loras': _trained_loras(), 'bases': training.BASES,
+                              'caption_ready': models._have(*training.CAPTION_MODEL),
+                              'usable': sum(1 for r in references.all_references() if training.usable(r))})
+
+
+@routes.post('/ea/api/training')
+async def training_create(request):
+    body = await request.json()
+    st = models.status()
+    base = body.get('base', 'hidream')
+    if not st.get(base, {}).get('ready'):
+        return fail(training.BASES.get(base, base) + ' is not downloaded yet.')
+    try:
+        s = await in_thread(training.create, body.get('name', ''), base, body.get('refs'), body.get('trigger') or training.TRIGGER,
+                            body.get('steps'), int(body.get('rank', 16)), float(body.get('learning_rate', 1e-4)))
+    except Exception as e:
+        return fail(e)
+    return web.json_response({'set': s, 'prompt': training.train_graph(s, int(body.get('seed', 0)))})
+
+
+@routes.post('/ea/api/training/{sid}/run')
+async def training_run(request):
+    try:
+        s = training.load(request.match_info['sid'])
+    except KeyError as e:
+        return fail(e, 404)
+    return web.json_response({'set': s, 'prompt': training.train_graph(s)})
+
+
+@routes.delete('/ea/api/training/{sid}')
+async def training_delete(request):
+    await in_thread(training.remove, request.match_info['sid'])
     return web.json_response({'ok': True})
 
 

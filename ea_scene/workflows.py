@@ -69,6 +69,13 @@ def build(job, variation=0, status=None):
     refs = [g.add('EAJobImage', job=jid, name=f'ref{i + 1}') for i in range(len(job.get('refs') or []))]
     opt = (status or {}).get(fam, {}).get('optional', {})
 
+    style = job.get('style') or None
+
+    def with_style(model):
+        if not style or not style.get('lora'):
+            return model
+        return out(g.add('LoraLoaderModelOnly', model=model, lora_name=style['lora'], strength_model=float(style.get('strength', 0.8))))
+
     def latent(vae, empty_cls):
         if worn:
             return g.add(empty_cls, width=int(fw), height=int(fh), batch_size=1)
@@ -79,7 +86,7 @@ def build(job, variation=0, status=None):
         unet = g.add('UNETLoader', unet_name=F['files']['unet'][1], weight_dtype='default')
         clip = g.add('CLIPLoader', clip_name=F['files']['clip'][1], type='qwen_image', device='default')
         vae = g.add('VAELoader', vae_name=F['files']['vae'][1])
-        m = g.add('ModelSamplingAuraFlow', model=out(unet), shift=3.1)
+        m = g.add('ModelSamplingAuraFlow', model=with_style(out(unet)), shift=3.1)
         m = g.add('CFGNorm', model=out(m), strength=1.0)
         cfg = q.get('cfg', 4.0)
         if job.get('quality') == 'draft' and opt.get('lightning'):
@@ -141,7 +148,7 @@ def build(job, variation=0, status=None):
 
     elif fam == 'hidream':
         ck = g.add('CheckpointLoaderSimple', ckpt_name=F['files']['ckpt'][1])
-        ns = g.add('ModelNoiseScale', model=out(ck, 0), noise_scale=8.0)
+        ns = g.add('ModelNoiseScale', model=with_style(out(ck, 0)), noise_scale=8.0)
         m = g.add('HiDreamO1PatchSeamSmoothing', model=out(ns), start_percent=0.8, end_percent=1.0,
                   pattern='single_shift', passes='ramp_2_4', blend='median', strength=1.0)
         m = g.add('DifferentialDiffusion', model=out(m), strength=1.0)

@@ -93,6 +93,11 @@ def create(req):
             save_png(os.path.join(d, f'ref{i + 1}.png'), r)
             refs.append(rid)
     text = req.get('prompt') or scene.prompt(s, p, family, refs=len(refs))
+    style = req.get('style') or None
+    if style and style.get('base') != family:
+        style = None                                   # a style is trained for one model only
+    if style and style.get('trigger') and style['trigger'].lower() not in text.lower():
+        text = style['trigger'] + ', ' + text
     neg = req.get('negative') if req.get('negative') is not None else scene.negative(s)
     seed = int(req.get('seed') if req.get('seed') not in (None, '') else int(time.time() * 1000) % 2**32)
     j = {
@@ -101,6 +106,7 @@ def create(req):
         'frame': [fw, fh], 'output': [ow, oh], 'product_mode': mode, 'refs': refs,
         'variations': int(req.get('variations', 1)), 'upsample_prompt': bool(req.get('upsample_prompt')),
         'name': req.get('name') or '', 'batch': req.get('batch') or '', 'results': [],
+        'style': style,
     }
     write_json(os.path.join(d, 'job.json'), j)
     return j
@@ -166,8 +172,8 @@ def finish(jid, generated, index=0):
         save_png(os.path.join(out_dir, name + '-parts.png'), composite.parts_map(paste))
     th = resize(final, 640, int(640 * oh / ow))
     save_jpg(os.path.join(out_dir, name + '-thumb.jpg'), th, quality=85)
-    info = {k: j[k] for k in ('id', 'product', 'product_name', 'family', 'quality', 'place', 'scene', 'prompt', 'negative',
-                              'frame', 'output', 'product_mode', 'refs', 'name', 'batch')}
+    info = {k: j.get(k) for k in ('id', 'product', 'product_name', 'family', 'quality', 'place', 'scene', 'prompt', 'negative',
+                                  'frame', 'output', 'product_mode', 'refs', 'name', 'batch', 'style')}
     info['output'] = [int(ow), int(oh)]
     info.update({'job': jid, 'seed': j['seed'] + index, 'variation': index, 'result': name, 'day': day,
                  'finished': now_iso(), 'paste_seconds': round(time.time() - t0, 2)})

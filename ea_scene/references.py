@@ -3,8 +3,13 @@
 Each lives in data/references/<id>/ with the picture and reference.json: where it came from, who made it,
 its licence, and whether it may be used for training. Only pictures with a recorded right go into training.
 """
+import json
 import os
 import shutil
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from . import paths
 from .util import inside, load_rgb, new_id, now_iso, read_json, safe_name, thumbnail, write_json
@@ -80,3 +85,68 @@ def remove(rid):
     d = folder(rid)
     if os.path.isdir(d):
         shutil.rmtree(d)
+
+
+# ---------------------------------------------------------------- finding openly licensed pictures (Openverse)
+
+UA = 'EmpiricalArmory-SceneGenerator/0.2 (https://github.com/EmpiricalArmory/scene-generator)'
+OPEN_LICENCES = 'by,by-sa,cc0,pdm'          # commercial use and changes allowed; no NC or ND
+LICENCE_NAMES = {'by': 'CC BY', 'by-sa': 'CC BY-SA', 'cc0': 'CC0', 'pdm': 'Public domain'}
+
+
+def search_open(q, page=1):
+    url = 'https://api.openverse.org/v1/images/?' + urllib.parse.urlencode(
+        {'q': q, 'license': OPEN_LICENCES, 'page_size': 20, 'page': max(1, int(page)), 'mature': 'false'})
+    req = urllib.request.Request(url, headers={'User-Agent': UA})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        d = json.load(r)
+    out = []
+    for x in d.get('results', []):
+        lic = (x.get('license') or '').lower()
+        out.append({
+            'id': x.get('id'), 'title': x.get('title') or '', 'url': x.get('url'), 'thumb': x.get('thumbnail'),
+            'creator': x.get('creator') or '', 'licence': (LICENCE_NAMES.get(lic, lic.upper()) + ' ' + (x.get('license_version') or '')).strip(),
+            'licence_url': x.get('license_url') or '', 'source': x.get('foreign_landing_url') or x.get('url'),
+            'provider': x.get('provider') or '', 'size': [x.get('width'), x.get('height')], 'rights': 'cc0' if lic in ('cc0', 'pdm') else 'cc-by',
+        })
+    return {'results': out, 'pages': d.get('page_count', 1), 'count': d.get('result_count', 0)}
+
+
+def _polite_url(item):
+    """Wikimedia asks automated clients for standard thumbnail sizes: take the 3840 px one of very large files."""
+    url = item.get('url') or ''
+    w = (item.get('size') or [0])[0] or 0
+    pre = 'https://upload.wikimedia.org/wikipedia/commons/'
+    if url.startswith(pre) and '/thumb/' not in url and w and w > 3840:
+        rest = url[len(pre):]                      # a/ab/Name.jpg
+        name = rest.rsplit('/', 1)[-1]
+        return pre + 'thumb/' + rest + '/3840px-' + name
+    return url
+
+
+def import_open(item):
+    """Download an Openverse picture into the references, with its credit and licence."""
+    import time
+    url = _polite_url(item)
+    if not url.startswith('https://'):
+        raise ValueError('Only https links can be imported.')
+    fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(urllib.parse.urlparse(url).path)[1] or '.jpg')
+    os.close(fd)
+    try:
+        for wait in (0, 5, 20, 45):
+            time.sleep(wait)
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': UA})
+                with urllib.request.urlopen(req, timeout=120) as r, open(tmp, 'wb') as f:
+                    shutil.copyfileobj(r, f)
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 429 or wait == 45:
+                    raise
+        meta = {'title': item.get('title') or 'Openverse picture', 'creator': item.get('creator', ''), 'licence': item.get('licence', ''),
+                'source': item.get('source', ''), 'rights': item.get('rights', 'cc-by'),
+                'notes': ('Licence: ' + item['licence_url']) if item.get('licence_url') else '', 'tags': ''}
+        return add(tmp, os.path.basename(urllib.parse.urlparse(url).path), meta)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
