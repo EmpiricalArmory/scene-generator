@@ -214,6 +214,8 @@ async def product_place(request):
 
     def work():
         p, fg, alpha, cover = products.layers(pid)
+        if p.get('kind') != 'instrument' and not request.query.get('point'):
+            layout['point'] = 'keep'           # gloves, masks and jackets stay as photographed
         return composite.auto_place(alpha, layout)
     try:
         place = await in_thread(work)
