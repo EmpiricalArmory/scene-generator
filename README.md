@@ -1,6 +1,6 @@
 # Empirical Armory · scene generator
 
-Puts a real product photo into a generated scene: a place, the light, hands or a masked fencer holding the gear, and the camera's angle and lens. For gear that is held or set down, the product is never redrawn: the model makes everything around it, and the photo's own pixels go back on top, so the gear in the picture is the gear you photographed. Gear that is worn (gloves on hands, a mask on a head) has to change shape, so the model draws it from your photo instead, and the page says so.
+Draws a real product into a generated scene: a place, the light, hands or a masked fencer holding the gear, and the camera's angle and lens. The model is given your photos of the product and draws it at the angle, size and grip the scene needs, in the scene's own light; a detail pass then redraws the product against your photos so that its cross, grip, pommel or stitching match. For pictures that must show the real thing (a blade's flex, say), "Exact photo" keeps your photo as taken and builds the scene around it.
 
 It runs on your own computer, with free models, inside [ComfyUI](https://github.com/Comfy-Org/ComfyUI). The page opens in your browser at http://127.0.0.1:8188/ea/.
 
@@ -19,12 +19,13 @@ Needs an NVIDIA card with 24 GB (an RTX 4090 or similar), a driver from version 
 
 ## Using it
 
-- **Make.** Add a product photo, on a plain backdrop if you can. It is cut out automatically (BiRefNet), and "Check the cut-out" lets you fix the edges with a brush or lasso. For swords and trainers the handle is marked as the part hands may cover; change it with "Where hands may go". Pick a starting scene, then the place, light, people, pose and camera; drag, scroll and shift-drag the product in the frame. Choose a model and Generate.
-- **Results.** Every picture, with the model's own picture before the product went back on, the parts map, and how it was made. "Use these settings" brings a picture's settings, seed included, back to Make.
+- **Make.** Add a product photo, on a plain backdrop if you can, and under "Photos of it" more photos of its other sides and close-ups. Each is cut out automatically (BiRefNet); "Check the cut-out" fixes the main photo's edges with a brush or lasso. "What it's made of" tells the model how the product takes light. With one photo only, "Make other angles…" has Qwen-Image-Edit-2511 turn it to new views; these are marked as model-made, so check them before you keep them. Pick a starting scene, then the place, light, people, pose and camera. Choose a model and Generate.
+- **Picture.** "Drawn into the scene" (the default) lets the model choose the product's angle and size; tick "Use the frame as a rough guide" to say roughly where it goes, by dragging it in the frame. "Exact photo" puts your photo in exactly where you drag it, and "Relight the photo to the scene" lets the scene's light fall on it. "Enlarge with SeedVR2" gives the finished picture real detail at the output size.
+- **Results.** Every picture, with the model's first pass (before the detail or relight pass), the parts map, and how it was made. "Use these settings" brings a picture's settings, seed included, back to Make.
 - **Compare models.** The same product, scenes and seeds through each model, side by side.
 - **References.** Photographs whose look your scenes should follow. Find openly licensed ones (Openverse: CC0, public domain, CC BY, CC BY-SA), or add your own, and record each one's creator, licence and right to use. Pick some as style references in Make.
 - **Train a style.** From references you may use, with captions (written by Gemma 4, then read through by you), a LoRA is trained for HiDream-O1-Image or Qwen-Image-Edit-2511 with ComfyUI's own trainer. Pick it in Make, under Model.
-- **Models.** What is installed, the helpers (cut-out, captions, segmentation), your Hugging Face token, and a restart button.
+- **Models.** What is installed, the helpers (cut-outs, captions, finding the product, other angles, enlarging), your Hugging Face token, and a restart button.
 
 ## The models
 
@@ -37,17 +38,28 @@ All free to run on your computer. Each has its own licence:
 | [HiDream-O1-Image](https://huggingface.co/HiDream-ai/HiDream-O1-Image) | MIT | Yes, training included |
 | [BiRefNet](https://huggingface.co/ZhengPeng7/BiRefNet), [Lucida](https://huggingface.co/egeorcun/lucida) | MIT | Cut-outs |
 | [Gemma 4 E4B](https://huggingface.co/google/gemma-4-e4b-it) | Apache 2.0 | Captions |
-| [SAM 3.1](https://huggingface.co/facebook/sam3.1) | SAM License | Selecting parts |
+| [SAM 3.1](https://huggingface.co/facebook/sam3.1) | SAM License | Finding the product in a picture (detail pass, parts map) |
+| [Multiple angles LoRA](https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA) for Qwen-Image-Edit-2511, by fal | Apache 2.0 | New views of a product from one photo |
+| [SeedVR2 7B](https://huggingface.co/Comfy-Org/SeedVR2), by ByteDance Seed | Apache 2.0 | Enlarging the finished picture |
 
 Training pictures need a right to use: your own photographs, public domain or CC0, Creative Commons with credit, or a licence. Pictures marked "Unknown" are never used for training.
 
 ## How it works
 
-For gear that is held or set down:
+This follows the usual way of putting a real product into generated photographs with open models: reference photos of the product, generation from those references, then a detail pass against them.
 
-1. The product is placed on a frame at the model's preferred size, on a plain backdrop (`canvas.png`), with a mask of where the model may draw (`draw.png`): everywhere except the product, plus the parts hands may cover.
-2. The model sees that picture as its reference, with the prompt, and draws only where the mask allows; the product's area is held to its own pixels at every step (ComfyUI's latent noise mask with differential diffusion).
-3. EA Finish scales the model's picture to the output size and pastes the product from the full-resolution photo, with its edges cleaned of the old backdrop. "Exact detail, scene's light" instead keeps the photo's detail under the model's broader light and colour.
+**Drawn into the scene** (the default):
+
+1. Each photo of the product is cut out and put on a plain light grey backdrop, cropped to the product (`ref.png`). The model is given these as its first pictures (up to 3 with Qwen-Image-Edit-2511, 5 with HiDream-O1-Image, 10 with FLUX 3), then any style references, with a prompt that names them in order: "the longsword shown in the first two pictures, held upright by one gloved hand…", what it is made of, and that it must be exactly that product, seen at the angle and size the photograph needs and lit by its light.
+2. The model draws the whole picture from an empty start. If the frame is used as a guide, the prompt says roughly where the product goes; FLUX 3 also gets its own layout box.
+3. The detail pass. SAM 3 finds the product in the picture by name ("sword", "glove:2"). The area around it is cut out with a margin, enlarged to about 2 to 4 megapixels, and redrawn at part strength (0.5 by default) with the product's photos beside it, only within the product and a little around it (latent noise mask with differential diffusion). The redrawn area is blended back into the picture at the output size, enlarged by SeedVR2 if chosen.
+4. SAM 3 finds the product once more in the finished picture, and its mask, snapped to the edges, becomes the parts map.
+
+**Exact photo:**
+
+1. The product is placed on a frame at the model's preferred size, on a plain backdrop (`canvas.png`), with a mask of where the model may draw (`draw.png`): everywhere except the product, plus the parts hands may cover. The model draws the scene around it while the product's area is held to its own pixels at every step.
+2. The relight pass (if ticked) redraws the picture at part strength: fully over the product, strongly in a ring around it for contact shadows, lightly elsewhere (`harmonize.png`), with the product's photo beside it.
+3. EA Finish scales the picture to the output size and puts the photo's fine detail back over the product from the full-resolution photo: its pixels as they are, or, after the relight pass, its detail under the relit light and colour.
 
 ## Folder layout
 
@@ -67,10 +79,10 @@ setup\                      installer, model list, logs
 
 - `__init__.py`: the ComfyUI extension's entry.
 - `ea_scene/api.py`, `page.py`: the API under `/ea/api/` and the page under `/ea/`.
-- `ea_scene/products.py`, `imaging.py`: cut-outs, edges, previews.
-- `ea_scene/composite.py`: placement, the model's inputs, pasting back, parts maps.
-- `ea_scene/scene.py`: scene settings and prompts.
-- `ea_scene/workflows.py`, `nodes.py`, `jobs.py`: the ComfyUI workflows, the generator's nodes, and the jobs and results.
+- `ea_scene/products.py`, `imaging.py`: products and their photos, cut-outs, edges, previews.
+- `ea_scene/composite.py`: placement, the model's inputs for an exact photo, putting it back, parts maps.
+- `ea_scene/scene.py`: scene settings and prompts (natural, exact, detail pass, relight, angles).
+- `ea_scene/workflows.py`, `nodes.py`, `jobs.py`: the ComfyUI workflows (one kit per model, shared by every pass), the generator's nodes (including the detail pass's crop and paste), and the jobs and results.
 - `ea_scene/references.py`, `training.py`, `downloads.py`: references, training, model downloads.
 - `web/`: the page (plain HTML, CSS and JavaScript modules).
 

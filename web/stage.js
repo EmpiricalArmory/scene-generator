@@ -1,6 +1,7 @@
 // The frame: the product's cut-out drawn where it will sit, moved, sized and turned by hand.
 // The maths matches ea_scene/composite.py: photo point p goes to centre + R(rotation) * flip * s * (p - pc),
 // with s = length * frameHeight / (the product box's long side).
+// mode: 'exact' (the photo goes exactly here), 'guide' (a rough guide for the model), 'free' (the model decides).
 
 const ASPECTS = { '1:1': [1, 1], '4:5': [4, 5], '5:4': [5, 4], '3:2': [3, 2], '2:3': [2, 3], '16:9': [16, 9], '9:16': [9, 16] };
 
@@ -10,6 +11,7 @@ export class Stage {
     this.ctx = canvasEl.getContext('2d');
     this.place = { aspect: '4:5', cx: 0.5, cy: 0.5, length: 0.8, rotation: 0, flip: false };
     this.product = null; this.img = null; this.cover = null; this.showCover = true;
+    this.mode = 'exact';
     this.drag = null;
     new ResizeObserver(() => this.layout()).observe(wrapEl);
     this.bind();
@@ -17,6 +19,7 @@ export class Stage {
 
   setProduct(product, img, coverImg) { this.product = product; this.img = img; this.cover = coverImg; this.draw(); }
   setPlace(place) { this.place = { ...this.place, ...place }; this.layout(); }
+  setMode(mode) { this.mode = mode; this.draw(); }
 
   aspect() { return ASPECTS[this.place.aspect] || [4, 5]; }
 
@@ -61,21 +64,37 @@ export class Stage {
       c.beginPath(); c.moveTo(0, f * this.fh); c.lineTo(this.fw, f * this.fh); c.stroke();
     }
     const t = this.transform();
-    if (!t || !this.img) return;
+    if (!t || !this.img || this.mode === 'free') return;
     const pv = this.product.preview;
     const [bx0, by0, bx1, by1] = pv.box;
+    const guide = this.mode === 'guide';
     c.save();
     c.translate(t.cx, t.cy);
     c.rotate(t.th);
     c.scale(t.flip ? -t.s : t.s, t.s);
     c.translate(-t.pcx, -t.pcy);
+    if (guide) c.globalAlpha = 0.45;
     c.drawImage(this.img, bx0, by0, bx1 - bx0, by1 - by0);
-    if (this.cover && this.showCover && this.product.cover) {
+    c.globalAlpha = 1;
+    if (!guide && this.cover && this.showCover && this.product.cover) {
       c.globalAlpha = 0.55;
       c.drawImage(this.cover, bx0, by0, bx1 - bx0, by1 - by0);
       c.globalAlpha = 1;
     }
     c.restore();
+    if (guide) {
+      // the box the model is told about
+      const [x0, y0, x1, y1] = this.product.cutout.box;
+      const pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => {
+        const dx = (t.flip ? -(x - t.pcx) : x - t.pcx) * t.s, dy = (y - t.pcy) * t.s;
+        return [t.cx + dx * Math.cos(t.th) - dy * Math.sin(t.th), t.cy + dx * Math.sin(t.th) + dy * Math.cos(t.th)];
+      });
+      const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+      c.setLineDash([6, 5]); c.strokeStyle = 'rgba(31,27,22,0.7)'; c.lineWidth = 1.5;
+      c.strokeRect(Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+      c.setLineDash([]);
+      return;
+    }
     // the cut ends of a product cropped by its photo's edge
     const open = this.product.cutout.open_edges || [];
     if (open.length) {
@@ -89,7 +108,7 @@ export class Stage {
     const pts = new Map();
     const local = (e) => { const r = el.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
     el.addEventListener('pointerdown', (e) => {
-      if (!this.product) return;
+      if (!this.product || this.mode === 'free') return;
       el.setPointerCapture(e.pointerId);
       pts.set(e.pointerId, local(e));
       const [x, y] = local(e);
@@ -126,7 +145,7 @@ export class Stage {
     };
     el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
     el.addEventListener('wheel', (e) => {
-      if (!this.product) return;
+      if (!this.product || this.mode === 'free') return;
       e.preventDefault();
       const k = Math.exp(-e.deltaY * 0.0015);
       this.place.length = clamp(this.place.length * k, 0.05, 2.5);

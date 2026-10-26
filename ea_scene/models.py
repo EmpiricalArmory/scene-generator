@@ -2,7 +2,6 @@
 import os
 
 from . import paths
-from .util import read_json
 
 # Trained frame sizes. HiDream-O1 was trained at about 4 megapixels and loses quality below it.
 HIDREAM_SIZES = [(2048, 2048), (2304, 1728), (1728, 2304), (2560, 1440), (1440, 2560), (2496, 1664),
@@ -25,6 +24,8 @@ FAMILIES = {
         'megapixels': {'final': 4.0, 'draft': 1.0},
         'quality': {'final': {'steps': 16}, 'draft': {'steps': 8}},
         'max_refs': 9,
+        'pictures': 10,          # product photos and style references together
+        'detail_mp': {'final': 4.0, 'draft': 1.5},
     },
     'qwen': {
         'name': 'Qwen-Image-Edit-2511',
@@ -41,6 +42,8 @@ FAMILIES = {
         'megapixels': {'final': 1.6, 'draft': 1.0},
         'quality': {'final': {'steps': 40, 'cfg': 4.0}, 'draft': {'steps': 8, 'cfg': 1.0}},
         'max_refs': 2,
+        'pictures': 3,
+        'detail_mp': {'final': 2.0, 'draft': 1.2},
     },
     'hidream': {
         'name': 'HiDream-O1-Image',
@@ -53,8 +56,15 @@ FAMILIES = {
         'sizes': HIDREAM_SIZES,
         'quality': {'final': {'steps': 50, 'cfg': 5.0}, 'draft': {'steps': 28, 'cfg': 5.0}},
         'max_refs': 4,
+        'pictures': 5,
+        'detail_mp': {'final': 4.0, 'draft': 3.0},
     },
 }
+
+SAM3 = ('checkpoints', 'sam3.1_multiplex_fp16.safetensors')
+ANGLES_LORA = ('loras', 'qwen-image-edit-2511-multiple-angles-lora.safetensors')
+SEEDVR2 = {'unet': ('diffusion_models', 'seedvr2_7b_int8_convrot.safetensors'),
+           'vae': ('vae', 'seedvr2_ema_vae_fp16.safetensors')}
 
 HELPERS = {
     'birefnet': {'label': 'BiRefNet (cut-outs)', 'folder': 'background_removal', 'file': 'birefnet.safetensors',
@@ -69,7 +79,27 @@ HELPERS = {
     'gemma4': {'label': 'Gemma 4 E4B (writes captions for training)', 'folder': 'text_encoders', 'file': 'gemma4_e4b_it_fp8_scaled.safetensors',
                'url': 'https://huggingface.co/Comfy-Org/gemma-4/resolve/main/text_encoders/gemma4_e4b_it_fp8_scaled.safetensors',
                'size': 9057782194, 'sha256': 'bf0b4fa2e41a25684dc9e9b256cd505564f02fed09be3da95ce024e653e2c52b', 'licence': 'Apache 2.0'},
+    'angles': {'label': 'Multiple angles for Qwen-Image-Edit-2511 (makes other views of a product from one photo)', 'folder': 'loras',
+               'file': 'qwen-image-edit-2511-multiple-angles-lora.safetensors',
+               'url': 'https://huggingface.co/fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA/resolve/main/qwen-image-edit-2511-multiple-angles-lora.safetensors',
+               'size': 295140688, 'sha256': '42426ded4e25fd22879d9e198b857556445ef4ca56e8da3246d0345155bb6765', 'licence': 'Apache 2.0 (by fal)'},
+    'seedvr2': {'label': 'SeedVR2 7B (enlarges the finished picture with real detail)', 'licence': 'Apache 2.0 (by ByteDance Seed)',
+                'files': [
+                    {'folder': 'diffusion_models', 'file': 'seedvr2_7b_int8_convrot.safetensors',
+                     'url': 'https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/diffusion_models/seedvr2_7b_int8_convrot.safetensors',
+                     'size': 8334897976, 'sha256': '5aa0d25fc9d35e449b659d0c9a5dcb22e2a4fa04032101b95a39da42b32c1be6'},
+                    {'folder': 'vae', 'file': 'seedvr2_ema_vae_fp16.safetensors',
+                     'url': 'https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/vae/seedvr2_ema_vae_fp16.safetensors',
+                     'size': 501324814, 'sha256': '20678548f420d98d26f11442d3528f8b8c94e57ee046ef93dbb7633da8612ca1'},
+                ]},
 }
+
+
+def helper_files(h):
+    """A helper's files: most have one, some (SeedVR2) more."""
+    if h.get('files'):
+        return h['files']
+    return [{'folder': h['folder'], 'file': h['file'], 'url': h['url'], 'size': h['size'], 'sha256': h['sha256']}]
 
 
 def _have(folder, name):
@@ -80,12 +110,17 @@ def _have(folder, name):
         return os.path.isfile(os.path.join(paths.MODELS, folder, name))
 
 
+def have_helper(key):
+    return all(_have(f['folder'], f['file']) for f in helper_files(HELPERS[key]))
+
+
 def status():
     out = {}
     for key, f in FAMILIES.items():
         need = {k: _have(*v) for k, v in f['files'].items()}
         opt = {k: _have(*v) for k, v in f.get('optional', {}).items()}
         out[key] = {'name': f['name'], 'maker': f['maker'], 'licence': f['licence'], 'ready': all(need.values()),
-                    'files': need, 'optional': opt, 'max_refs': f['max_refs']}
-    out['_helpers'] = {k: {'label': h['label'], 'ready': _have(h['folder'], h['file']), 'licence': h['licence']} for k, h in HELPERS.items()}
+                    'files': need, 'optional': opt, 'max_refs': f['max_refs'], 'pictures': f['pictures']}
+    out['_helpers'] = {k: {'label': h['label'], 'ready': have_helper(k), 'licence': h['licence'],
+                           'size': sum(x['size'] for x in helper_files(h))} for k, h in HELPERS.items()}
     return out

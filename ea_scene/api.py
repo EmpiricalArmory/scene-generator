@@ -134,9 +134,10 @@ async def product_add(request):
 @routes.get('/ea/api/products/{pid}')
 async def product_get(request):
     try:
-        return web.json_response({'product': products.load(request.match_info['pid'])})
+        p = products.load(request.match_info['pid'])
     except KeyError as e:
         return fail(e, 404)
+    return web.json_response({'product': p, 'find': products.find_term(p)})
 
 
 @routes.post('/ea/api/products/{pid}')
@@ -147,10 +148,11 @@ async def product_update(request):
         p = products.load(pid)
     except KeyError as e:
         return fail(e, 404)
-    for k in ('name', 'noun', 'kind', 'credit', 'notes'):
+    for k in ('name', 'noun', 'kind', 'credit', 'notes', 'materials', 'find'):
         if k in body:
             p[k] = body[k]
-    return web.json_response({'product': products.save(p)})
+    p = products.save(p)
+    return web.json_response({'product': p, 'find': products.find_term(p)})
 
 
 @routes.delete('/ea/api/products/{pid}')
@@ -197,6 +199,66 @@ async def product_cover(request):
     return web.json_response({'product': p})
 
 
+@routes.post('/ea/api/products/{pid}/views')
+async def view_add(request):
+    """More photos of the product: each is saved and returned with the workflow that cuts it out."""
+    pid = request.match_info['pid']
+    form = await request.post()
+    files = [f for f in form.getall('file', []) if getattr(f, 'filename', None)]
+    if not files:
+        return fail('No photo was sent.')
+    added, graphs = [], []
+    for f in files:
+        tmp = await save_upload(f)
+        try:
+            v = await in_thread(products.add_view, pid, tmp, f.filename, 'photo', form.get('label', ''))
+        except Exception as e:
+            return fail(e)
+        finally:
+            os.remove(tmp)
+        added.append(v)
+        graphs.append(workflows.cutout_graph(pid, 'auto', v['id']))
+    return web.json_response({'product': products.load(pid), 'views': added, 'cutouts': graphs})
+
+
+@routes.post('/ea/api/products/{pid}/views/{vid}')
+async def view_update(request):
+    body = await request.json()
+    try:
+        p = products.update_view(request.match_info['pid'], request.match_info['vid'], body)
+    except KeyError as e:
+        return fail(e, 404)
+    return web.json_response({'product': p})
+
+
+@routes.delete('/ea/api/products/{pid}/views/{vid}')
+async def view_delete(request):
+    try:
+        p = await in_thread(products.remove_view, request.match_info['pid'], request.match_info['vid'])
+    except KeyError as e:
+        return fail(e, 404)
+    return web.json_response({'product': p})
+
+
+@routes.post('/ea/api/products/{pid}/angles')
+async def view_angles(request):
+    """Workflows that make other views of the product with the multiple-angles LoRA, one per angle."""
+    pid = request.match_info['pid']
+    body = await request.json()
+    st = models.status()
+    if not st['qwen']['ready']:
+        return fail('Other angles are made with Qwen-Image-Edit-2511, which is not downloaded yet.')
+    if not models.have_helper('angles'):
+        return fail('Download the multiple-angles helper under Models first.')
+    angles = [a for a in (body.get('angles') or []) if a in {x[0] for x in scene.ANGLES}]
+    if not angles:
+        return fail('Pick at least one angle.')
+    import random
+    graphs = workflows.angles_graphs(pid, angles, body.get('source') or 'main', body.get('quality', 'final'), st,
+                                     seed=random.randint(0, 2**31))
+    return web.json_response({'prompts': graphs})
+
+
 @routes.get('/ea/api/products/{pid}/place')
 async def product_place(request):
     """A starting placement for a preset (or a raw layout given as query values)."""
@@ -228,13 +290,27 @@ async def product_place(request):
 
 @routes.post('/ea/api/prompt')
 async def prompt_text(request):
+    """The prompt a picture would get, for the page to show (the guide's position words are added when it is made)."""
     body = await request.json()
     try:
         p = products.load(body['product'])
+        n_views = len(products.reference_files(p['id'])) if p.get('cutout') else 1
     except Exception:
         p = {'kind': body.get('kind', 'instrument'), 'noun': body.get('noun', '')}
+        n_views = 1
+    fam = body.get('family') or 'qwen'
+    F = models.FAMILIES.get(fam, models.FAMILIES['qwen'])
     s = body.get('scene') or {}
-    return web.json_response({'prompt': scene.prompt(s, p, body.get('family', 'qwen')), 'negative': scene.negative(s)})
+    mode = body.get('mode') or 'natural'
+    n_refs = int(body.get('refs') or 0)
+    if mode == 'exact' and s.get('pose') not in scene.WORN:
+        views, refs = 1, min(n_refs, F['max_refs'], F['pictures'] - 1)
+    else:
+        style_slots = min(n_refs, max(1, F['pictures'] // 3)) if n_refs else 0
+        views = max(1, min(n_views, F['pictures'] - style_slots))
+        refs = min(n_refs, F['pictures'] - views)
+    return web.json_response({'prompt': scene.prompt(s, p, fam, refs=refs, mode=mode, views=views),
+                              'negative': scene.negative(s), 'views': views, 'refs': refs})
 
 
 @routes.post('/ea/api/jobs')

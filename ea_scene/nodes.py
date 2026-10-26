@@ -1,12 +1,17 @@
 """ComfyUI nodes used by the generator's workflows.
 
-EA Job Image / EA Job Mask   read what the generator prepared for a job (the product on its frame,
-                             where the model may draw, style references).
+EA Job Image / EA Job Mask   read what the generator prepared for a job (the product's photos, the
+                             product on its frame, where the model may draw, style references).
 EA Qwen Edit Encode          Qwen-Image-Edit's prompt encoder, with the first picture's reference kept
-                             at the frame's own size so the edit lines up with the product.
-EA Finish                    puts the product's own pixels back on the generated picture and saves it.
-EA Product Cut-out           finds the product in its photo and saves the cut-out.
+                             at its own size when the picture is the one being changed.
+EA Detail Crop / Paste       the detail pass: the area around the product, enlarged for redrawing, and
+                             the redrawn product blended back into the (enlarged) picture.
+EA Finish                    saves the picture, the parts map and how it was made ("Exact photo": with the
+                             photo's own detail put back on top).
+EA Product Cut-out           finds the product in one of its photos and saves the cut-out.
+EA Product Picture / Add View   a product's photo on a plain backdrop, and a model-made view kept with it.
 """
+import json
 import math
 import os
 import time
@@ -17,12 +22,37 @@ import torch
 import comfy.utils
 import node_helpers
 
-from . import jobs, paths, products, references, training
-from .util import load_gray, load_rgb, read_json
+from . import imaging, jobs, products, references, training
+from .util import load_gray, load_rgb, read_json, resize
 
 
 def _image_tensor(a):
     return torch.from_numpy(np.ascontiguousarray(a[..., :3], dtype=np.float32))[None]
+
+
+def _mask_tensor(a):
+    return torch.from_numpy(np.ascontiguousarray(a, dtype=np.float32))[None]
+
+
+def _first_mask(mask, h, w):
+    """A MASK input as one (h, w) array in 0..1."""
+    m = mask.detach().float().cpu().numpy()
+    while m.ndim > 2:
+        m = m[0]
+    if m.shape != (h, w):
+        m = resize(m, w, h, resample=2)
+    return np.clip(m, 0, 1)
+
+
+def _span(a, b, n):
+    """Shift [a, b) inside [0, n) without changing its length, if it fits."""
+    if b - a >= n:
+        return 0, n
+    if a < 0:
+        b, a = b - a, 0
+    if b > n:
+        a, b = a - (b - n), n
+    return int(math.floor(max(0, a))), int(math.ceil(min(n, b)))
 
 
 class EAJobImage:
@@ -108,6 +138,92 @@ class EAQwenEditEncode:
         return (conditioning,)
 
 
+class EADetailCrop:
+    """The area around the product (where `mask` is), with a margin, no narrower than 1 : max_aspect,
+    enlarged to about `megapixels` (at most 3 times) for the model to redraw; and the product's mask in it,
+    grown a little and softened, for where the redraw may change things."""
+    CATEGORY = 'Empirical Armory'
+    RETURN_TYPES = ('IMAGE', 'MASK', 'STRING')
+    RETURN_NAMES = ('crop', 'crop_mask', 'info')
+    FUNCTION = 'crop'
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'image': ('IMAGE',), 'mask': ('MASK',),
+                             'megapixels': ('FLOAT', {'default': 2.0, 'min': 0.25, 'max': 8.0, 'step': 0.05})},
+                'optional': {'margin': ('FLOAT', {'default': 0.1, 'min': 0.0, 'max': 1.0, 'step': 0.01}),
+                             'max_aspect': ('FLOAT', {'default': 2.0, 'min': 1.0, 'max': 4.0, 'step': 0.1})}}
+
+    def crop(self, image, mask, megapixels, margin=0.1, max_aspect=2.0):
+        img = image[0].detach().float().cpu().numpy()[..., :3]
+        H, W = img.shape[:2]
+        m = _first_mask(mask, H, W) > 0.5
+        found = bool(m.sum() > 0.0003 * H * W)
+        if found:
+            ys, xs = np.nonzero(m)
+            x0, x1, y0, y1 = float(xs.min()), float(xs.max() + 1), float(ys.min()), float(ys.max() + 1)
+            pad = margin * max(x1 - x0, y1 - y0) + 16
+            x0, x1, y0, y1 = x0 - pad, x1 + pad, y0 - pad, y1 + pad
+            bw, bh = x1 - x0, y1 - y0
+            if bw > bh * max_aspect:
+                grow = (bw / max_aspect - bh) / 2
+                y0, y1 = y0 - grow, y1 + grow
+            elif bh > bw * max_aspect:
+                grow = (bh / max_aspect - bw) / 2
+                x0, x1 = x0 - grow, x1 + grow
+            x0, x1 = _span(x0, x1, W)
+            y0, y1 = _span(y0, y1, H)
+        else:
+            x0, y0, x1, y1 = 0, 0, min(W, 512), min(H, 512)
+        cw, ch = x1 - x0, y1 - y0
+        k = min(3.0, max(1.0, math.sqrt(megapixels * 1024 * 1024 / (cw * ch)))) if found else 1.0
+        tw, th = max(64, int(round(cw * k / 32)) * 32), max(64, int(round(ch * k / 32)) * 32)
+        crop = np.clip(resize(img[y0:y1, x0:x1], tw, th), 0, 1)
+        if found:
+            mm = m[y0:y1, x0:x1]
+            mm = imaging.dilate(mm, max(3, int(0.015 * max(cw, ch))))
+            mm = imaging.feather(mm.astype(np.float32), max(1.5, 0.006 * max(cw, ch)))
+            mm = np.clip(resize(mm, tw, th, resample=2), 0, 1)
+        else:
+            mm = np.zeros((th, tw), np.float32)
+        info = {'found': found, 'box': [int(x0), int(y0), int(x1), int(y1)], 'frame': [int(W), int(H)], 'size': [int(tw), int(th)]}
+        return (_image_tensor(crop), _mask_tensor(mm), json.dumps(info))
+
+
+class EADetailPaste:
+    """The picture at width x height (resized if it isn't), with the redrawn product blended back in."""
+    CATEGORY = 'Empirical Armory'
+    RETURN_TYPES = ('IMAGE',)
+    FUNCTION = 'paste'
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'base': ('IMAGE',), 'refined': ('IMAGE',), 'crop_mask': ('MASK',), 'info': ('STRING', {'forceInput': True}),
+                             'width': ('INT', {'default': 2048, 'min': 64, 'max': 16384}),
+                             'height': ('INT', {'default': 2048, 'min': 64, 'max': 16384})}}
+
+    def paste(self, base, refined, crop_mask, info, width, height):
+        out = base[0].detach().float().cpu().numpy()[..., :3]
+        if out.shape[:2] != (height, width):
+            out = np.clip(resize(out, width, height), 0, 1)
+        else:
+            out = out.copy()
+        meta = json.loads(info)
+        if not meta.get('found'):
+            return (_image_tensor(out),)
+        x0, y0, x1, y1 = meta['box']
+        FW, FH = meta['frame']
+        fx, fy = width / FW, height / FH
+        X0, Y0 = int(round(x0 * fx)), int(round(y0 * fy))
+        X1, Y1 = min(width, int(round(x1 * fx))), min(height, int(round(y1 * fy)))
+        bw, bh = X1 - X0, Y1 - Y0
+        r = np.clip(resize(refined[0].detach().float().cpu().numpy()[..., :3], bw, bh), 0, 1)
+        mk = _first_mask(crop_mask, bh, bw)[..., None]
+        region = out[Y0:Y1, X0:X1]
+        out[Y0:Y1, X0:X1] = region * (1 - mk) + r * mk
+        return (_image_tensor(out),)
+
+
 class EAFinish:
     CATEGORY = 'Empirical Armory'
     RETURN_TYPES = ()
@@ -117,11 +233,22 @@ class EAFinish:
     @classmethod
     def INPUT_TYPES(cls):
         return {'required': {'images': ('IMAGE',), 'job': ('STRING', {'default': ''}),
-                             'variation': ('INT', {'default': 0, 'min': 0, 'max': 1000})}}
+                             'variation': ('INT', {'default': 0, 'min': 0, 'max': 1000})},
+                'optional': {'raw': ('IMAGE',), 'mask': ('MASK',)}}
 
-    def finish(self, images, job, variation=0):
+    def finish(self, images, job, variation=0, raw=None, mask=None):
         arr = images.detach().float().cpu().numpy()
-        results = [jobs.finish(job, arr[i], index=variation + i) for i in range(arr.shape[0])]
+        raws = None if raw is None else raw.detach().float().cpu().numpy()
+        masks = None
+        if mask is not None:
+            masks = mask.detach().float().cpu().numpy()
+            if masks.ndim == 2:
+                masks = masks[None]
+        results = []
+        for i in range(arr.shape[0]):
+            r = raws[min(i, raws.shape[0] - 1)][..., :3] if raws is not None else None
+            m = masks[min(i, masks.shape[0] - 1)] if masks is not None and masks.shape[0] else None
+            results.append(jobs.finish(job, arr[i][..., :3], index=variation + i, raw=r, mask=m))
         return {'ui': {'ea_results': results}}
 
 
@@ -135,18 +262,64 @@ class EAProductCutout:
     def INPUT_TYPES(cls):
         return {'required': {'product': ('STRING', {'default': ''}),
                              'method': (['auto', 'model', 'white backdrop'],)},
-                'optional': {'mask': ('MASK',)}}
+                'optional': {'mask': ('MASK',), 'view': ('STRING', {'default': ''})}}
 
     @classmethod
-    def IS_CHANGED(cls, product, method, mask=None):
+    def IS_CHANGED(cls, product, method, mask=None, view=''):
         return time.time()
 
-    def cut(self, product, method, mask=None):
+    def cut(self, product, method, mask=None, view=''):
         m = None if mask is None else mask.detach().float().cpu().numpy()
         if m is not None and m.ndim == 3:
             m = m.max(axis=0)
-        info = products.cut_out(product, method, mask=m)
+        if view:
+            info = products.cut_out_view(product, view, method, mask=m)
+        else:
+            info = products.cut_out(product, method, mask=m)
         return {'ui': {'ea_product': [info]}}
+
+
+class EAProductPicture:
+    """A product's photo on a plain backdrop, cropped to it ('main' or one of its other photos)."""
+    CATEGORY = 'Empirical Armory'
+    RETURN_TYPES = ('IMAGE',)
+    FUNCTION = 'load'
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'product': ('STRING', {'default': ''}), 'view': ('STRING', {'default': 'main'})}}
+
+    @classmethod
+    def _path(cls, product, view):
+        if not view or view == 'main':
+            return products.main_reference(product)
+        return os.path.join(products.view_folder(product, view), 'ref.png')
+
+    @classmethod
+    def IS_CHANGED(cls, product, view):
+        p = cls._path(product, view)
+        return os.path.getmtime(p) if os.path.isfile(p) else time.time()
+
+    def load(self, product, view):
+        return (_image_tensor(load_rgb(self._path(product, view))),)
+
+
+class EAAddView:
+    """Keeps a picture a model made of the product as one of its photos, marked as made by a model."""
+    CATEGORY = 'Empirical Armory'
+    RETURN_TYPES = ()
+    FUNCTION = 'add'
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {'required': {'images': ('IMAGE',), 'product': ('STRING', {'default': ''}),
+                             'label': ('STRING', {'default': ''}), 'source': ('STRING', {'default': 'main'})}}
+
+    def add(self, images, product, label, source):
+        arr = images.detach().float().cpu().numpy()
+        views = [products.add_view_array(product, arr[i][..., :3], label=label, source=source) for i in range(arr.shape[0])]
+        return {'ui': {'ea_view': views}}
 
 
 class EARefImage:
@@ -223,8 +396,12 @@ NODE_CLASS_MAPPINGS = {
     'EAJobImage': EAJobImage,
     'EAJobMask': EAJobMask,
     'EAQwenEditEncode': EAQwenEditEncode,
+    'EADetailCrop': EADetailCrop,
+    'EADetailPaste': EADetailPaste,
     'EAFinish': EAFinish,
     'EAProductCutout': EAProductCutout,
+    'EAProductPicture': EAProductPicture,
+    'EAAddView': EAAddView,
     'EARefImage': EARefImage,
     'EASaveCaption': EASaveCaption,
     'EATrainingImages': EATrainingImages,
@@ -234,8 +411,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     'EAJobImage': 'EA Job Image',
     'EAJobMask': 'EA Job Mask',
     'EAQwenEditEncode': 'EA Qwen Edit Encode',
-    'EAFinish': 'EA Finish (product pasted back)',
+    'EADetailCrop': 'EA Detail Crop',
+    'EADetailPaste': 'EA Detail Paste',
+    'EAFinish': 'EA Finish',
     'EAProductCutout': 'EA Product Cut-out',
+    'EAProductPicture': 'EA Product Picture',
+    'EAAddView': 'EA Add View',
     'EARefImage': 'EA Reference Picture',
     'EASaveCaption': 'EA Save Caption',
     'EATrainingImages': 'EA Training Set',

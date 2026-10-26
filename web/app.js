@@ -14,13 +14,16 @@ const isWorn = () => WORN.has(S.scene.pose);
 const KIND_LABELS = { instrument: 'Sword or trainer', gloves: 'Gloves', mask: 'Mask', jacket: 'Jacket', other: 'Other' };
 
 const S = {
-  options: null, status: null, products: [], product: null, references: [],
+  options: null, status: null, products: [], product: null, references: [], find: '',
   place: { aspect: '4:5', cx: 0.5, cy: 0.5, length: 0.8, rotation: 0, flip: false },
   scene: { preset: 'cover', pose: 'held-up', people: 'hand', place: 'brick', light: 'overcast', height: 'eye', lens: '85', aperture: '2.8', side: 'right', framing: 'half', extra: '', place_text: '' },
   style: null, styles: [],
-  custom: false, customText: '', family: null, quality: 'final', variations: 2, seed: '', mode: 'exact', outLong: 2400, refs: [],
+  custom: false, customText: '', family: null, quality: 'final', variations: 2, seed: '', outLong: 2400, refs: [],
+  // how the product goes in: 'natural' (drawn from its photos) or 'exact' (the photo, relit)
+  mode: 'natural', detail: true, detailStrength: 0.5, guide: false, relight: true, seedvr: false,
   cards: [],
 };
+const effectiveMode = () => (isWorn() ? 'natural' : S.mode);
 
 // ---------------------------------------------------------------- small helpers
 async function api(path, opts = {}) {
@@ -145,12 +148,15 @@ function renderProducts() {
 
 async function selectProduct(id, { quiet = false } = {}) {
   const r = await api('/ea/api/products/' + id);
-  S.product = r.product; store('product', id);
+  S.product = r.product; S.find = r.find || ''; store('product', id);
   renderProducts();
   $('#productDetail').hidden = false;
   $('#inName').value = S.product.name || '';
   $('#inNoun').value = S.product.noun || '';
+  $('#inMaterials').value = S.product.materials || '';
+  $('#inFind').value = S.product.find || ''; $('#inFind').placeholder = S.find;
   segKind(S.product.kind || 'other');
+  renderViews();
   const c = S.product.cutout;
   $('#cutInfo').textContent = !c ? 'Cutting it out…' : `Cut out ${c.method === 'model' ? 'by the model' : c.method === 'edited' ? 'and edited by hand' : 'by ' + c.method}. ${S.product.size[0]} × ${S.product.size[1]} px.` + (S.product.credit ? ` ${S.product.credit.title || ''} by ${S.product.credit.creator}, ${S.product.credit.licence}.` : '');
   showEmpty(false);
@@ -168,7 +174,7 @@ async function selectProduct(id, { quiet = false } = {}) {
   } else {
     stage.setProduct(null, null, null);
   }
-  updatePrompt(); updateGenerate();
+  applyMode(); updatePrompt(); updateGenerate();
 }
 
 // the cover preview is grey; turn it into a translucent orange layer
@@ -186,12 +192,91 @@ function segKind(kind) {
   el.innerHTML = Object.entries(KIND_LABELS).map(([k, l]) => `<button type="button" data-v="${k}" aria-pressed="${k === kind}">${l}</button>`).join('');
   el.onclick = async (e) => {
     const b = e.target.closest('button'); if (!b || !S.product) return;
-    S.product = (await api('/ea/api/products/' + S.product.id, { json: { kind: b.dataset.v } })).product;
-    segKind(S.product.kind); renderPoses(); renderPresets(); updatePrompt();
+    const r = await api('/ea/api/products/' + S.product.id, { json: { kind: b.dataset.v } });
+    S.product = r.product; S.find = r.find; $('#inFind').placeholder = S.find;
+    segKind(S.product.kind); renderPoses(); renderPresets(); sceneChanged();
   };
 }
-$('#inName').addEventListener('change', async (e) => { if (!S.product) return; S.product = (await api('/ea/api/products/' + S.product.id, { json: { name: e.target.value } })).product; renderProducts(); });
-$('#inNoun').addEventListener('change', async (e) => { if (!S.product) return; S.product = (await api('/ea/api/products/' + S.product.id, { json: { noun: e.target.value } })).product; updatePrompt(); });
+async function saveProductField(k, v) {
+  if (!S.product) return;
+  const r = await api('/ea/api/products/' + S.product.id, { json: { [k]: v } });
+  S.product = r.product; S.find = r.find; $('#inFind').placeholder = S.find;
+}
+$('#inName').addEventListener('change', async (e) => { await saveProductField('name', e.target.value); renderProducts(); });
+$('#inNoun').addEventListener('change', async (e) => { await saveProductField('noun', e.target.value); updatePrompt(); });
+$('#inMaterials').addEventListener('change', async (e) => { await saveProductField('materials', e.target.value.trim()); updatePrompt(); });
+$('#inFind').addEventListener('change', async (e) => { await saveProductField('find', e.target.value.trim()); });
+
+// ---------------------------------------------------------------- the product's other photos
+function renderViews() {
+  const p = S.product; if (!p) return;
+  const views = p.views || [];
+  const used = 1 + views.filter((v) => v.use !== false && v.cutout).length;
+  $('#viewCount').textContent = `${used} in use`;
+  $('#viewList').innerHTML = `<figure class="view"><img src="${dataUrl(`products/${p.id}/thumb.jpg?r=${p.rev || 0}`)}" alt=""><figcaption>The main photo</figcaption></figure>`
+    + views.map((v, i) => `<figure class="view${v.use === false ? ' off' : ''}" data-vid="${esc(v.id)}">
+      <img src="${dataUrl(`products/${p.id}/views/${v.id}/thumb.jpg?r=${v.rev || 0}`)}" alt="" onerror="this.style.visibility='hidden'">
+      ${v.made === 'model' ? '<span class="badge" title="Made by a model from a photo: check it">Model-made</span>' : ''}
+      ${v.cutout ? '' : '<div class="busy">Cutting out…</div>'}
+      <figcaption title="${esc(v.label || '')}">${esc(v.label || `Photo ${i + 2}`)}</figcaption>
+      <label class="use"><input type="checkbox" data-use ${v.use === false ? '' : 'checked'}> Use</label>
+      <button class="x" type="button" data-del title="Remove this photo" aria-label="Remove this photo">×</button></figure>`).join('')
+    + `<label class="view add">Add photos<br>of other sides<input type="file" accept="image/*" multiple hidden id="fileViews"></label>`;
+  $('#fileViews').addEventListener('change', (e) => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) addViews(fs); });
+}
+$('#viewList').addEventListener('change', async (e) => {
+  const f = e.target.closest('.view[data-vid]'); if (!f || !e.target.matches('[data-use]')) return;
+  try { S.product = (await api(`/ea/api/products/${S.product.id}/views/${f.dataset.vid}`, { json: { use: e.target.checked } })).product; renderViews(); updatePrompt(); }
+  catch (err) { toast(err.message, true); }
+});
+$('#viewList').addEventListener('click', async (e) => {
+  const f = e.target.closest('.view[data-vid]'); if (!f || !e.target.matches('[data-del]')) return;
+  if (!confirm('Remove this photo of the product?')) return;
+  try { S.product = (await api(`/ea/api/products/${S.product.id}/views/${f.dataset.vid}`, { method: 'DELETE' })).product; renderViews(); updatePrompt(); }
+  catch (err) { toast(err.message, true); }
+});
+async function addViews(files) {
+  const p = S.product; if (!p) return;
+  const fd = new FormData();
+  for (const f of files) fd.append('file', f, f.name);
+  toast(`Adding ${files.length} photo${files.length === 1 ? '' : 's'} and cutting ${files.length === 1 ? 'it' : 'them'} out…`);
+  try {
+    const r = await api(`/ea/api/products/${p.id}/views`, { method: 'POST', body: fd });
+    S.product = r.product; renderViews();
+    for (const g of r.cutouts) { await comfy.run(g); S.product = (await api('/ea/api/products/' + p.id)).product; renderViews(); }
+    updatePrompt();
+    toast('Added. Untick any photo the models should not use.');
+  } catch (e) { toast('Could not add the photos: ' + e.message, true); }
+}
+
+// other angles, made by Qwen-Image-Edit-2511 with the multiple-angles add-on
+let anglePick = ['back', 'front-left'];
+$('#btnAngles').addEventListener('click', () => {
+  const panel = $('#anglePanel'); panel.hidden = !panel.hidden;
+  if (panel.hidden) return;
+  seg($('#segAngles'), S.options.angles, anglePick, (v, sync) => { anglePick = anglePick.includes(v) ? anglePick.filter((x) => x !== v) : [...anglePick, v]; sync(anglePick); }, { multi: true });
+  const st = S.status?.models || {};
+  const ready = st.qwen?.ready && st._helpers?.angles?.ready;
+  $('#btnMakeAngles').disabled = !ready;
+  $('#angleState').textContent = !st.qwen?.ready ? 'Needs Qwen-Image-Edit-2511 (Models).' : !st._helpers?.angles?.ready ? 'Download the multiple-angles helper under Models first (0.3 GB).' : '';
+});
+$('#btnMakeAngles').addEventListener('click', async () => {
+  const p = S.product; if (!p || !anglePick.length) return;
+  $('#btnMakeAngles').disabled = true;
+  try {
+    const r = await api(`/ea/api/products/${p.id}/angles`, { json: { angles: anglePick, source: 'main', quality: S.quality } });
+    let n = 0;
+    $('#angleState').textContent = `Making ${r.prompts.length} view${r.prompts.length === 1 ? '' : 's'}…`;
+    for (const g of r.prompts) {
+      await comfy.run(g, { onProgress: (v, m) => { $('#angleState').textContent = `View ${n + 1} of ${r.prompts.length}: step ${v} of ${m}`; } });
+      n++;
+      S.product = (await api('/ea/api/products/' + p.id)).product; renderViews();
+    }
+    $('#angleState').textContent = `${n} view${n === 1 ? '' : 's'} added, marked "Model-made". Check each against the real product.`;
+    updatePrompt();
+  } catch (e) { toast(e.message, true); $('#angleState').textContent = ''; }
+  finally { $('#btnMakeAngles').disabled = false; }
+});
 
 async function addProduct(file, extra = {}) {
   const fd = new FormData();
@@ -291,20 +376,59 @@ function renderPresets() {
     const pr = S.options.presets.find((p) => p.id === v);
     S.scene = { ...S.scene, ...pr.scene, preset: v, place_text: '' };
     sync(v); renderScene(); sceneChanged();
-    if (pr.mode === 'reference') { S.place.aspect = pr.layout.aspect; syncAspect(S.place.aspect); stage.setPlace(S.place); }
+    if (pr.worn) { S.place.aspect = pr.layout.aspect; syncAspect(S.place.aspect); stage.setPlace(S.place); }
     else await autoPlace(v, pr.layout.aspect);
   });
 }
 function sceneChanged() {
-  const worn = isWorn();
-  $('#stageWrap').classList.toggle('worn', worn);
-  $('#wornNote').hidden = !worn;
-  for (const id of ['#btnPointUp', '#btnCentre', '#inRotation', '#inLength']) $(id).disabled = worn;
   $('#rowSide').hidden = !(['hand', 'hands'].includes(S.scene.people) || ['held-up', 'in-hand'].includes(S.scene.pose));
   $('#rowFraming').hidden = !['fencer', 'pair'].includes(S.scene.people);
   store('scene', S.scene);
+  applyMode();
   updatePrompt();
 }
+
+// how the product goes in, and what the frame means for it
+const MODE_HINTS = {
+  natural: 'The model draws the product from its photos, at the angle, size and grip the scene needs, in the scene\'s light. The detail pass then redraws it against the photos.',
+  exact: 'Your photo exactly as taken, at its own angle: the model makes the scene around it. Use it to show the real thing, such as a blade\'s flex.',
+};
+function applyMode() {
+  const worn = isWorn();
+  const mode = effectiveMode();
+  for (const b of $$('#segMode button')) {
+    b.setAttribute('aria-pressed', b.dataset.v === mode);
+    b.disabled = worn && b.dataset.v === 'exact';
+  }
+  $('#modeHint').textContent = worn ? 'Worn gear is always drawn by the model: a photo can\'t be bent onto a body.' : MODE_HINTS[mode];
+  $('#rowNatural').hidden = mode !== 'natural';
+  $('#rowExact').hidden = mode !== 'exact';
+  const samReady = !!S.status?.models?._helpers?.sam3?.ready;
+  $('#chkDetail').disabled = !samReady;
+  $('#chkDetail').checked = samReady && S.detail;
+  $('#rowDetailStrength').hidden = !(samReady && S.detail);
+  const stageMode = mode === 'exact' ? 'exact' : S.guide && !worn ? 'guide' : 'free';
+  stage.setMode(stageMode);
+  const wrap = $('#stageWrap');
+  wrap.classList.toggle('free', stageMode === 'free');
+  for (const id of ['#btnPointUp', '#btnCentre', '#inRotation', '#inLength', '#chkCover']) $(id).disabled = stageMode === 'free';
+  $('#chkCover').disabled = stageMode !== 'exact';
+  const note = $('#modeNote');
+  note.hidden = !S.product?.cutout || stageMode === 'exact';
+  note.innerHTML = worn ? '<strong>Worn gear is drawn by the model</strong> from your photos, on the fencer. The frame sets only the shape of the picture.'
+    : stageMode === 'free' ? '<strong>The model chooses the angle and size.</strong> The frame sets only the shape of the picture. To say roughly where the product goes, tick "Use the frame as a rough guide" under Picture.'
+      : '<strong>A rough guide.</strong> The model is told the product goes about here, about this size; it still draws it at the angle and light the scene needs.';
+  const sv = !!S.status?.models?._helpers?.seedvr2?.ready;
+  $('#chkSeedvr').disabled = !sv; $('#chkSeedvr').checked = sv && S.seedvr;
+  $('#outHint').textContent = sv ? 'The long side. SeedVR2 enlarges the picture to it with real detail; without it the picture is resized.'
+    : 'The long side; the picture is resized to it. SeedVR2 (a helper under Models) can enlarge it with real detail instead.';
+}
+segStatic($('#segMode'), S.mode, (v) => { if (isWorn()) return; S.mode = v; store('mode2', v); applyMode(); updatePrompt(); });
+$('#chkDetail').addEventListener('change', (e) => { S.detail = e.target.checked; store('detail', S.detail); applyMode(); });
+$('#inDetail').addEventListener('input', (e) => { S.detailStrength = +e.target.value; $('#outDetail').textContent = e.target.value; store('detailStrength', S.detailStrength); });
+$('#chkGuide').addEventListener('change', (e) => { S.guide = e.target.checked; store('guide', S.guide); applyMode(); });
+$('#chkRelight').addEventListener('change', (e) => { S.relight = e.target.checked; store('relight', S.relight); });
+$('#chkSeedvr').addEventListener('change', (e) => { S.seedvr = e.target.checked; store('seedvr', S.seedvr); });
 $('#inPlaceText').addEventListener('input', debounce((e) => { S.scene.place_text = e.target.value.trim(); if (S.scene.place_text) syncPlace(''); sceneChanged(); }, 400));
 $('#inExtra').addEventListener('input', debounce((e) => { S.scene.extra = e.target.value.trim(); sceneChanged(); }, 400));
 $('#chkCustom').addEventListener('change', (e) => {
@@ -316,13 +440,12 @@ $('#txtPrompt').addEventListener('input', (e) => { if (S.custom) S.customText = 
 const updatePrompt = debounce(async () => {
   if (S.custom) return;
   try {
-    const r = await api('/ea/api/prompt', { json: { product: S.product?.id, scene: S.scene, family: S.family } });
+    const r = await api('/ea/api/prompt', { json: { product: S.product?.id, scene: S.scene, family: S.family, mode: effectiveMode(), refs: S.refs.length } });
     $('#txtPrompt').value = r.prompt;
   } catch { /* the server may be restarting */ }
 }, 150);
 
 // ---------------------------------------------------------------- picture and model
-segStatic($('#segMode'), S.mode, (v) => { S.mode = v; store('mode', v); });
 segStatic($('#segOut'), S.outLong, (v) => { S.outLong = +v; store('outLong', S.outLong); });
 segStatic($('#segQuality'), S.quality, (v) => { S.quality = v; store('quality', v); });
 $('#selVariations').addEventListener('change', (e) => { S.variations = +e.target.value; store('variations', S.variations); });
@@ -355,7 +478,7 @@ function renderRefPick() {
     const b = e.target.closest('button'); if (!b) return;
     const id = b.dataset.id;
     S.refs = S.refs.includes(id) ? S.refs.filter((x) => x !== id) : [...S.refs, id].slice(-4);
-    renderRefPick();
+    renderRefPick(); updatePrompt();
   };
 }
 
@@ -363,7 +486,9 @@ function renderRefPick() {
 function request(extra = {}) {
   return {
     product: S.product.id, place: S.place, scene: S.scene, family: S.family, quality: S.quality,
-    variations: S.variations, seed: S.seed === '' ? null : +S.seed, product_mode: S.mode, output_long: S.outLong,
+    variations: S.variations, seed: S.seed === '' ? null : +S.seed, output_long: S.outLong,
+    product_mode: effectiveMode(), detail: { on: S.detail, strength: S.detailStrength }, guide: S.guide,
+    relight: S.relight, upscale: S.seedvr ? 'seedvr2' : 'none',
     refs: S.refs, prompt: S.custom ? S.customText : null, style: S.style, ...extra,
   };
 }
@@ -393,13 +518,18 @@ function runJob(j, container, prepend = false, cardWidth) {
     const st = $('.state', card), bar = $('.bar span', card);
     let pid = null;
     const loaders = new Set(['UNETLoader', 'CLIPLoader', 'VAELoader', 'CheckpointLoaderSimple']);
+    const phase = phases(prompt);
+    let doing = 'Drawing';
     comfy.queue(prompt, {
       onNode: (node) => {
         if (node === 'start') { st.textContent = 'Starting'; return; }
         const cls = prompt[node]?.class_type || '';
-        st.textContent = loaders.has(cls) ? 'Loading the model' : cls.includes('Encode') ? 'Reading the prompt' : cls === 'TextGenerate' ? 'Writing the prompt' : cls === 'EAFinish' ? 'Putting the product back' : cls.startsWith('KSampler') || cls === 'SamplerCustom' ? 'Drawing' : st.textContent;
+        if (phase[node]) doing = phase[node];
+        st.textContent = loaders.has(cls) ? 'Loading a model' : cls === 'TextGenerate' ? 'Writing the prompt' : cls.includes('Encode') ? 'Reading the prompt'
+          : cls === 'SAM3_Detect' ? 'Finding the product' : cls === 'EADetailCrop' ? 'Cropping around the product' : cls === 'EADetailPaste' ? 'Putting the detail back'
+            : cls.startsWith('SeedVR2') ? 'Enlarging' : cls === 'EAFinish' ? 'Saving' : phase[node] || st.textContent;
       },
-      onProgress: (value, max) => { bar.style.width = ((100 * value) / max).toFixed(1) + '%'; st.textContent = `Drawing: step ${value} of ${max}`; },
+      onProgress: (value, max) => { bar.style.width = ((100 * value) / max).toFixed(1) + '%'; st.textContent = `${doing}: step ${value} of ${max}`; },
       onOutput: (node, out) => {
         for (const res of out.ea_results || []) {
           card.innerHTML = `<div class="ph" style="aspect-ratio:${job.output[0]} / ${job.output[1]}"><img src="${res.thumb}" alt=""></div><div class="cap">${esc(FAMILY_SHORT[res.family] || res.family)} · seed ${res.seed}</div>`;
@@ -410,6 +540,20 @@ function runJob(j, container, prepend = false, cardWidth) {
       onError: (msg) => { card.classList.add('err'); st.textContent = msg; bar.parentElement.hidden = true; },
     }).then((id) => { pid = id; }).catch((e) => { card.classList.add('err'); st.textContent = e.message; });
   });
+}
+
+// which pass each sampler in a workflow is, for the cards' progress
+function phases(prompt) {
+  const ids = Object.keys(prompt).filter((k) => ['KSampler', 'SamplerCustom'].includes(prompt[k].class_type)).sort((a, b) => +a - +b);
+  const detail = Object.values(prompt).some((n) => n.class_type === 'EADetailCrop');
+  const out = {};
+  let k = 0;
+  for (const id of ids) {
+    const m = prompt[id].inputs.model;
+    const seed = Array.isArray(m) && String(prompt[m[0]]?.inputs?.unet_name || '').startsWith('seedvr2');
+    out[id] = seed ? 'Enlarging' : k++ === 0 ? 'Drawing' : detail ? 'Detail pass' : 'Relighting';
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- the viewer
@@ -435,12 +579,26 @@ async function openViewer(rid) {
   $('#vInfo').innerHTML = `
     <p><span class="k">File</span><br>data/results/${esc(r.rid)}.png</p>
     <p><span class="k">Model</span><br>${esc(S.status?.models?.[r.family]?.name || r.family)}, ${esc(r.quality)}; seed ${r.seed}</p>
-    <p><span class="k">Size</span><br>${r.output[0]} × ${r.output[1]} px (the model drew at ${r.frame[0]} × ${r.frame[1]})</p>
-    <p><span class="k">The product</span><br>${r.product_mode === 'reference' ? 'Drawn by the model from the photo (worn gear): close, not exact' : r.product_mode === 'relit' ? 'Exact detail, the scene\'s light' : 'Exact pixels'}</p>
+    <p><span class="k">Size</span><br>${r.output[0]} × ${r.output[1]} px (the model drew at ${r.frame[0]} × ${r.frame[1]}${r.upscale === 'seedvr2' ? '; enlarged by SeedVR2' : ''})</p>
+    <p><span class="k">The product</span><br>${productText(r)}</p>
     <p><span class="k">Prompt</span><br>${esc(r.prompt)}</p>
     ${r.negative ? `<p><span class="k">Avoid</span><br>${esc(r.negative)}</p>` : ''}
     <p class="hint">The parts map paints the product in Product red for Tuned by part: open both there, or crop them the same way first.</p>`;
   $('#viewer').showModal();
+}
+function productText(r) {
+  const m = r.product_mode;
+  if (m === 'natural') {
+    const n = r.views || 1;
+    const d = r.detail || {};
+    return `Drawn by the model from ${n} photo${n === 1 ? '' : 's'}`
+      + (d.on ? `, then redrawn against ${d.views === 1 ? 'the photo' : 'them'} in the detail pass (strength ${d.strength})` : ', no detail pass')
+      + (r.guide ? '; placed by a rough guide' : '')
+      + (r.found === false ? '. SAM 3 did not find it again, so there is no parts map.' : '.');
+  }
+  if (m === 'reference') return 'Drawn by the model from the photo (worn gear): close, not exact.';
+  if (m === 'relit') return 'Exact detail, the scene\'s light.';
+  return r.relight ? 'Your photo, relit to the scene, with its own fine detail on top.' : 'Your photo\'s exact pixels.';
 }
 $('#vClose').addEventListener('click', () => $('#viewer').close());
 $('#vReuse').addEventListener('click', async () => {
@@ -450,6 +608,10 @@ $('#vReuse').addEventListener('click', async () => {
   if (r.product && r.product !== S.product?.id) await selectProduct(r.product, { quiet: true });
   S.scene = { ...S.scene, ...(r.scene || {}) }; S.place = { ...S.place, ...(r.place || {}) };
   S.family = r.family; S.quality = r.quality; S.seed = String(r.seed); $('#inSeed').value = S.seed;
+  if (r.product_mode === 'natural' || r.product_mode === 'exact') S.mode = r.product_mode;
+  if (r.detail) { S.detail = !!r.detail.on; S.detailStrength = r.detail.strength || S.detailStrength; $('#inDetail').value = S.detailStrength; $('#outDetail').textContent = S.detailStrength; }
+  S.guide = !!r.guide; $('#chkGuide').checked = S.guide;
+  if (r.product_mode === 'exact') { S.relight = !!r.relight; $('#chkRelight').checked = S.relight; }
   renderScene(); renderModels(); syncAspect(S.place.aspect); stage.setPlace(S.place); sceneChanged();
   toast('Settings loaded, seed included.');
 });
@@ -522,7 +684,7 @@ $('#btnCompare').addEventListener('click', async () => {
   $('#cmpGrid').innerHTML = ''; $('#cmpGrid').append(table);
   for (const pid of cmpPresets) {
     const pr = S.options.presets.find((p) => p.id === pid); if (!pr) continue;
-    const place = pr.mode === 'reference' ? { ...S.place, aspect: pr.layout.aspect } : (await api(`/ea/api/products/${S.product.id}/place?preset=${pid}`)).place;
+    const place = pr.worn ? { ...S.place, aspect: pr.layout.aspect } : (await api(`/ea/api/products/${S.product.id}/place?preset=${pid}`)).place;
     const sceneP = { ...S.scene, ...pr.scene, preset: pid, place_text: '', extra: '' };
     const r = await api('/ea/api/jobs', { json: request({ families: fams, scene: sceneP, place, variations: seeds, seed, quality, batch, prompt: null, refs: [] }) });
     const tr = document.createElement('tr');
@@ -683,10 +845,11 @@ async function refreshStatus() {
   const dls = st.downloads || {};
   $('#helperList').innerHTML = Object.entries(st.models._helpers || {}).map(([k, h]) => {
     const d = dls[k];
-    const state = h.ready ? 'Ready' : d ? (d.state === 'running' ? `${gb(d.done)} of ${gb(d.size)}` : d.state === 'error' ? d.error : d.state) : '';
-    return `<div class="dl"><span>${esc(h.label)} <span class="hint">· ${esc(h.licence)}</span></span><span class="st">${h.ready ? 'Ready' : `<button class="btn small" data-dl="${k}" type="button" ${d?.state === 'running' ? 'disabled' : ''}>Download</button>`} ${esc(state === 'Ready' ? '' : state)}</span>
-      ${d && d.state === 'running' ? `<div class="bar"><span style="width:${((100 * d.done) / d.size).toFixed(1)}%"></span></div>` : ''}</div>`;
+    const state = h.ready ? 'Ready' : d ? (d.state === 'running' ? `${gb(d.done)} of ${gb(d.size)}` : d.state === 'error' ? d.error : d.state) : gb(h.size || 0);
+    return `<div class="dl"><span>${esc(h.label)} <span class="hint">· ${esc(h.licence)}</span></span><span class="st">${h.ready ? 'Ready' : `<button class="btn small" data-dl="${k}" type="button" ${d?.state === 'running' || d?.state === 'checking' ? 'disabled' : ''}>Download</button>`} ${esc(state === 'Ready' ? '' : state)}</span>
+      ${d && (d.state === 'running' || d.state === 'checking') ? `<div class="bar"><span style="width:${((100 * d.done) / d.size).toFixed(1)}%"></span></div>` : ''}</div>`;
   }).join('');
+  applyMode();
   $('#installList').innerHTML = (st.install_files || []).map((f) => `<div class="dl"><span>${esc(f.label)}${f.optional ? ' <span class="hint">(optional)</span>' : ''}</span>
     <span class="st">${f.ready ? 'Ready' : f.downloaded ? `${gb(f.downloaded)} of ${gb(f.size)}` : gb(f.size)}</span>
     <div class="bar"><span style="width:${f.size ? ((100 * f.downloaded) / f.size).toFixed(1) : 0}%"></span></div></div>`).join('');
@@ -723,9 +886,12 @@ setInterval(() => { if (!$('#tab-models').hidden || !S.status || FAMILY_ORDER.so
 (async function start() {
   Object.assign(S.scene, recall('scene', {}));
   S.family = recall('family', null); S.quality = recall('quality', 'final'); S.variations = recall('variations', 2);
-  S.mode = recall('mode', 'exact'); S.outLong = recall('outLong', 2400);
+  S.mode = recall('mode2', 'natural'); S.outLong = recall('outLong', 2400);
+  S.detail = recall('detail', true); S.detailStrength = recall('detailStrength', 0.5); S.guide = recall('guide', false);
+  S.relight = recall('relight', true); S.seedvr = recall('seedvr', false);
+  $('#inDetail').value = S.detailStrength; $('#outDetail').textContent = S.detailStrength;
+  $('#chkGuide').checked = S.guide; $('#chkRelight').checked = S.relight;
   $('#selVariations').value = String(S.variations);
-  segStatic($('#segMode'), S.mode, (v) => { S.mode = v; store('mode', v); });
   segStatic($('#segOut'), String(S.outLong), (v) => { S.outLong = +v; store('outLong', S.outLong); });
   segStatic($('#segQuality'), S.quality, (v) => { S.quality = v; store('quality', v); });
   syncAspect(S.place.aspect); stage.setPlace(S.place);

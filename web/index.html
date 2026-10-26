@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Scene generator · Empirical Armory</title>
-<meta name="description" content="Puts a real product photo into a generated scene, with free models on this computer. The product's own pixels go back on top.">
+<meta name="description" content="Draws a real product into a generated scene from its photos, with free models on this computer, then redraws its detail against the photos.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cabin:wght@400;500;600&family=IM+Fell+English&display=swap">
@@ -49,10 +49,10 @@
         <canvas id="frameCanvas"></canvas>
         <div class="framehint" id="frameHint">Drag to move · Scroll or pinch to size · Shift-drag to turn</div>
       </div>
-      <div class="wornnote" id="wornNote" hidden><strong>Worn gear is drawn by the model.</strong> It looks at your photo and draws the gear on the fencer, so it comes out close but not exact, and it isn't pasted back. The frame sets only the shape of the picture.</div>
+      <div class="wornnote" id="modeNote" hidden></div>
       <div class="empty" id="makeEmpty">
         <h2>Start with a product</h2>
-        <p>Add a photo of the gear on a plain backdrop. The generator cuts it out and keeps its pixels exactly.</p>
+        <p>Add a photo of the gear on a plain backdrop, and more photos of its other sides if you have them. The models draw it into each scene from those photos.</p>
         <p><label class="btn primary">Add a product photo<input type="file" id="fileProduct" accept="image/*" hidden></label>
           <button class="btn" type="button" id="btnSample">Try the sample sword</button></p>
       </div>
@@ -68,6 +68,8 @@
         <div class="row"><label class="lab" for="inName">Name</label><input type="text" id="inName" class="txt"></div>
         <div class="row"><label class="lab" for="inNoun">What it is, in a few words</label><input type="text" id="inNoun" class="txt" placeholder="a longsword, a pair of fencing gloves…"></div>
         <div class="row"><span class="lab">Kind</span><div class="seg" id="segKind"></div></div>
+        <div class="row"><label class="lab" for="inMaterials">What it's made of</label><input type="text" id="inMaterials" class="txt" placeholder="e.g. a bright polished steel blade, a black leather grip, a blackened steel cross and pommel">
+          <p class="hint">Helps the model light it the way those materials take light.</p></div>
         <p class="note" id="cutInfo"></p>
         <div class="btns">
           <button class="btn small" type="button" id="btnEditMask">Check the cut-out</button>
@@ -75,6 +77,19 @@
           <button class="btn small" type="button" id="btnRecut">Cut out again</button>
           <button class="btn small" type="button" id="btnDeleteProduct">Remove</button>
         </div>
+        <div class="row">
+          <div class="lab between"><span>Photos of it</span><span class="hint" id="viewCount"></span></div>
+          <div class="views" id="viewList"></div>
+          <p class="hint">The models draw the product from every ticked photo. Other sides and close-ups of the hilt or the stitching make it truer at new angles.</p>
+          <div class="btns"><button class="btn small" type="button" id="btnAngles">Make other angles…</button></div>
+          <div class="angles" id="anglePanel" hidden>
+            <p class="hint">Qwen-Image-Edit-2511 turns the main photo to new camera angles, with fal's multiple-angles add-on. These views are made by a model: check them, and untick or remove any that get the product wrong.</p>
+            <div class="seg wrap" id="segAngles"></div>
+            <div class="row inline"><button class="btn small primary" type="button" id="btnMakeAngles">Make them</button><span class="hint" id="angleState"></span></div>
+          </div>
+        </div>
+        <div class="row"><label class="lab" for="inFind">Found in pictures as</label><input type="text" id="inFind" class="txt">
+          <p class="hint">The words SAM 3 looks for to find the product in a made picture, for the detail pass and the parts map. Add ":2" to find two (a pair of gloves).</p></div>
       </div>
     </details>
 
@@ -99,15 +114,26 @@
       </div>
     </details>
 
-    <details class="sec" id="secPicture">
+    <details class="sec" open id="secPicture">
       <summary>Picture</summary>
       <div class="row"><span class="lab">The product</span><div class="seg" id="segMode">
-        <button type="button" data-v="exact" aria-pressed="true" title="The photo's own pixels, untouched">Exact pixels</button>
-        <button type="button" data-v="relit" title="The photo's detail, with the scene's light and colour over it">Exact detail, scene's light</button></div></div>
+        <button type="button" data-v="natural" aria-pressed="true" title="The model draws the product from its photos, at the angle, size and light the scene needs">Drawn into the scene</button>
+        <button type="button" data-v="exact" title="Your photo as taken, at its own angle, with the scene made around it">Exact photo</button></div>
+        <p class="hint" id="modeHint"></p></div>
+      <div class="row" id="rowNatural">
+        <label class="chk"><input type="checkbox" id="chkDetail" checked> Detail pass: redraw the product against its photos</label>
+        <label class="mini" id="rowDetailStrength">How much it may change <input type="range" id="inDetail" min="0.25" max="0.8" step="0.05" value="0.5"><output id="outDetail">0.5</output></label>
+        <label class="chk"><input type="checkbox" id="chkGuide"> Use the frame as a rough guide to where it goes</label>
+      </div>
+      <div class="row" id="rowExact" hidden>
+        <label class="chk"><input type="checkbox" id="chkRelight" checked> Relight the photo to the scene</label>
+        <p class="hint">A second pass lets the scene's light, reflections and shadows fall on the product; the photo's fine detail is then put back on top.</p>
+      </div>
       <div class="row"><span class="lab">Size</span><div class="seg" id="segOut">
         <button type="button" data-v="2000">2000 px</button><button type="button" data-v="2400" aria-pressed="true">2400 px</button>
         <button type="button" data-v="3000">3000 px</button><button type="button" data-v="4000">4000 px</button></div>
-        <p class="hint">The long side. The product is pasted at this size from the full photo; the scene is scaled up to it.</p></div>
+        <label class="chk"><input type="checkbox" id="chkSeedvr"> Enlarge with SeedVR2 (adds real detail; slower)</label>
+        <p class="hint" id="outHint">The long side. Without SeedVR2 the picture is resized to it.</p></div>
       <div class="row"><span class="lab">Style references</span><div class="refpick" id="refPick"></div>
         <p class="hint">Pictures whose look the scene should follow (add them under References).</p></div>
     </details>
@@ -220,7 +246,7 @@
 <dialog class="viewer" id="viewer">
   <div class="vbar">
     <div class="seg" id="segViewer"><button type="button" data-v="final" aria-pressed="true">Final</button>
-      <button type="button" data-v="raw" title="The model's own picture, before the product went back on">Model's picture</button>
+      <button type="button" data-v="raw" title="The model's first picture, before the detail pass (or, for an exact photo, before the relight and the photo's detail)">First pass</button>
       <button type="button" data-v="parts" title="The parts map for Tuned by part">Parts map</button></div>
     <span class="vtitle" id="vTitle"></span>
     <a class="btn small" id="vDownload" download>Save the picture</a>
