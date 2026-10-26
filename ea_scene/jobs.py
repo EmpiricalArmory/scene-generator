@@ -96,6 +96,8 @@ def create(req):
     p = products.load(req['product'])
     if not p.get('cutout'):
         raise ValueError('The product has no cut-out yet.')
+    if p.get('kind') == 'instrument':
+        p['ratio'] = products.shape_ratio(p)            # for the prompt: its proportions in words
     family = req.get('family', 'qwen')
     if family not in FAMILIES:
         raise ValueError('Unknown model: ' + family)

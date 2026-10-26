@@ -68,6 +68,23 @@ def long_axis_angle(alpha):
     return math.degrees(math.atan2(v[1], v[0]))
 
 
+def length_to_width(alpha):
+    """How many times longer the product is than it is wide, along its long axis and across it (a sword: its
+    length over the span of its cross), from the mask; 0 when it can't tell."""
+    ys, xs = np.nonzero(alpha > 0.5)
+    if len(xs) < 50:
+        return 0.0
+    step = max(1, len(xs) // 300000)
+    pts = np.stack([xs[::step], ys[::step]], axis=1).astype(np.float64)
+    pts -= pts.mean(axis=0)
+    vals, vecs = np.linalg.eigh(np.cov(pts.T))
+    along = pts @ vecs[:, int(np.argmax(vals))]
+    across = pts @ vecs[:, int(np.argmin(vals))]
+    length = np.percentile(along, 99.9) - np.percentile(along, 0.1)
+    width = np.percentile(across, 99.9) - np.percentile(across, 0.1)
+    return float(length / width) if width > 0 else 0.0
+
+
 def point_direction(alpha):
     """Direction (degrees, image coordinates: 0 = right, 90 = down) from the product's middle toward its
     thin end: for a sword, the point. The cross is the widest part, and the point is the end farther from it."""

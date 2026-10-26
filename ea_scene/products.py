@@ -220,6 +220,7 @@ def _store_cutout(p, rgb, alpha, used):
     p['cutout'] = {
         'method': used, 'at': now_iso(), 'box': list(box), 'open_edges': composite.open_edges(alpha),
         'axis_deg': round(composite.long_axis_angle(alpha), 1), 'coverage': round(float((alpha > 0.5).mean()), 4),
+        'ratio': round(composite.length_to_width(alpha), 2),
     }
     p['backdrop'] = [round(float(c), 4) for c in backdrop]
     if p.get('kind') == 'instrument' and not p.get('cover'):
@@ -465,7 +466,25 @@ def reference_files(pid, limit=None):
     return out[:limit] if limit else out
 
 
-HILT = {'instrument': 'sword hilt'}       # a closer look in the detail pass, by kind
+def shape_ratio(p):
+    """How many times longer than wide the product is in its main photo (a sword: its length over its cross's
+    span), measured once from the cut-out; 0 when the photo cuts it off or it can't be told."""
+    c = p.get('cutout') or {}
+    if c.get('open_edges'):
+        return 0.0
+    if c.get('ratio') is None:
+        path = file(p['id'], 'mask.png')
+        if not os.path.exists(path):
+            return 0.0
+        c['ratio'] = round(composite.length_to_width(load_gray(path)), 2)
+        p['cutout'] = c
+        save(p)
+    return float(c.get('ratio') or 0.0)
+
+
+# a closer look in the detail pass, by kind: SAM 3 alone took "sword hilt" for the cross in one picture and
+# for the grip and pommel in another, so the hilt is the union of three finds (a comma splits SAM 3's prompts)
+HILT = {'instrument': 'sword hilt, cross guard, pommel'}
 
 
 def hilt_term(p):

@@ -325,6 +325,11 @@ def fidelity(product, views):
     text = (f'The {noun} must be exactly the one in {_product_pictures(len(shows))}: {shape}, '
             f'materials and every detail{DETAIL_PARTS.get(kind, "")}, seen at the angle and size this photograph needs '
             f'and lit by its light')
+    ratio = float(product.get('ratio') or 0)
+    if kind == 'instrument' and ratio >= 2:
+        r = round(ratio * 2) / 2
+        text += (f'. Keep its proportions, the blade at its full length: the whole {_strip_article(noun)} is about '
+                 f'{r:g} times as long as its cross guard is wide')
     mats = (product.get('materials') or '').strip().rstrip('.')
     if mats:
         text += f'. It is made of {mats}, and takes the light the way those materials do'
