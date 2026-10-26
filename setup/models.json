@@ -1,0 +1,125 @@
+{
+ "version": 1,
+ "files": [
+  {
+   "group": "hidream",
+   "label": "HiDream-O1-Image (full, bf16)",
+   "repo": "Comfy-Org/HiDream-O1-Image",
+   "path": "checkpoints/hidream_o1_image_bf16.safetensors",
+   "dest": "checkpoints/hidream_o1_image_bf16.safetensors",
+   "size": 16365209824,
+   "sha256": "0520134a47e5b2bacea25804b2a6021413eb95945344b5a953aa14170edff1aa",
+   "gated": false,
+   "optional": false,
+   "url": "https://huggingface.co/Comfy-Org/HiDream-O1-Image/resolve/main/checkpoints/hidream_o1_image_bf16.safetensors"
+  },
+  {
+   "group": "flux3",
+   "label": "FLUX 3 Image Klein (bf16)",
+   "repo": "black-forest-labs/flux-3-image-klein-comfy",
+   "path": "diffusion_models/flux3-image-klein-bf16.safetensors",
+   "dest": "diffusion_models/flux3-image-klein-bf16.safetensors",
+   "size": 11097404512,
+   "sha256": "c3e9813cdd049c831c836b2e9db61150e49a93fc1a4c63b256494642fee0bd7c",
+   "gated": true,
+   "optional": false,
+   "url": "https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/diffusion_models/flux3-image-klein-bf16.safetensors"
+  },
+  {
+   "group": "flux3",
+   "label": "FLUX 3 text encoder: Qwen3-VL-4B (bf16)",
+   "repo": "black-forest-labs/flux-3-image-klein-comfy",
+   "path": "text_encoders/qwen3vl_4b_bf16.safetensors",
+   "dest": "text_encoders/qwen3vl_4b_bf16.safetensors",
+   "size": 8875719408,
+   "sha256": "f0b24fc5c8d7c0ea6ca909da14c20af5cac53f22506be942c6c956f838b9630f",
+   "gated": true,
+   "optional": false,
+   "url": "https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/text_encoders/qwen3vl_4b_bf16.safetensors"
+  },
+  {
+   "group": "flux3",
+   "label": "FLUX 3 prompt upsampler (int8)",
+   "repo": "black-forest-labs/flux-3-image-klein-comfy",
+   "path": "text_encoders/qwen3.5_9b_flux3_prompt_upsampler_int8_convrot.safetensors",
+   "dest": "text_encoders/qwen3.5_9b_flux3_prompt_upsampler_int8_convrot.safetensors",
+   "size": 9748113996,
+   "sha256": "cb8cb9b9dcd2569509de755dca54d96fd93a16a7aabfd2f4051f0a144230620f",
+   "gated": true,
+   "optional": false,
+   "url": "https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/text_encoders/qwen3.5_9b_flux3_prompt_upsampler_int8_convrot.safetensors"
+  },
+  {
+   "group": "flux3",
+   "label": "FLUX 2/3 VAE",
+   "repo": "black-forest-labs/flux-3-image-klein-comfy",
+   "path": "vae/flux2-vae.safetensors",
+   "dest": "vae/flux2-vae.safetensors",
+   "size": 336211292,
+   "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3",
+   "gated": true,
+   "optional": false,
+   "url": "https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/vae/flux2-vae.safetensors"
+  },
+  {
+   "group": "qwen",
+   "label": "Qwen-Image-Edit-2511 (bf16)",
+   "repo": "Comfy-Org/Qwen-Image-Edit_ComfyUI",
+   "path": "split_files/diffusion_models/qwen_image_edit_2511_bf16.safetensors",
+   "dest": "diffusion_models/qwen_image_edit_2511_bf16.safetensors",
+   "size": 40861031560,
+   "sha256": "ae42d927b5fac4f278b9a894554c727e619727a63622976f2d95625be4bce08c",
+   "gated": false,
+   "optional": false,
+   "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_bf16.safetensors"
+  },
+  {
+   "group": "qwen",
+   "label": "Qwen text encoder: Qwen2.5-VL-7B (bf16)",
+   "repo": "Comfy-Org/Qwen-Image_ComfyUI",
+   "path": "split_files/text_encoders/qwen_2.5_vl_7b.safetensors",
+   "dest": "text_encoders/qwen_2.5_vl_7b.safetensors",
+   "size": 16584415576,
+   "sha256": "cfafd739459bc86257397259f612a9aee88e5b98e85b5c0d0d1717e898b3463a",
+   "gated": false,
+   "optional": false,
+   "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b.safetensors"
+  },
+  {
+   "group": "qwen",
+   "label": "Qwen-Image VAE",
+   "repo": "Comfy-Org/Qwen-Image_ComfyUI",
+   "path": "split_files/vae/qwen_image_vae.safetensors",
+   "dest": "vae/qwen_image_vae.safetensors",
+   "size": 253806246,
+   "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+   "gated": false,
+   "optional": false,
+   "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors"
+  },
+  {
+   "group": "qwen",
+   "label": "Qwen-Image-Edit-2511 Lightning 8-step LoRA (drafts)",
+   "repo": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+   "path": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+   "dest": "loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+   "size": 849608296,
+   "sha256": "a9e81a58a78f260f67b337a6f615e8fa4cd3bc79847c77b7d61a581b789b1ba8",
+   "gated": false,
+   "optional": false,
+   "url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
+  },
+  {
+   "group": "flux3",
+   "label": "FLUX 3 Image Klein Base (bf16, 50 steps)",
+   "repo": "black-forest-labs/flux-3-image-klein-comfy",
+   "path": "diffusion_models/flux3-image-klein-base-bf16.safetensors",
+   "dest": "diffusion_models/flux3-image-klein-base-bf16.safetensors",
+   "size": 11076957072,
+   "sha256": "5c921759dc03663dbb67df11d8e3d317d2d5b893b31b969c95dc77ebf861b19c",
+   "gated": true,
+   "optional": true,
+   "url": "https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy/resolve/main/diffusion_models/flux3-image-klein-base-bf16.safetensors"
+  }
+ ]
+}
