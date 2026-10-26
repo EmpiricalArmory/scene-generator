@@ -58,10 +58,22 @@ def build(job, variation=0, status=None):
     seed = int(job['seed']) + int(variation)
     g = Graph()
     jid = job['id']
-    canvas = g.add('EAJobImage', job=jid, name='canvas')
-    draw = g.add('EAJobMask', job=jid, name='draw')
+    worn = job.get('product_mode') == 'reference'
+    fw, fh = job['frame']
+    if worn:
+        canvas = g.add('EAJobImage', job=jid, name='product')      # the product, for the model to draw from
+        draw = None
+    else:
+        canvas = g.add('EAJobImage', job=jid, name='canvas')
+        draw = g.add('EAJobMask', job=jid, name='draw')
     refs = [g.add('EAJobImage', job=jid, name=f'ref{i + 1}') for i in range(len(job.get('refs') or []))]
     opt = (status or {}).get(fam, {}).get('optional', {})
+
+    def latent(vae, empty_cls):
+        if worn:
+            return g.add(empty_cls, width=int(fw), height=int(fh), batch_size=1)
+        lat = g.add('VAEEncode', pixels=out(canvas), vae=vae)
+        return g.add('SetLatentNoiseMask', samples=out(lat), mask=out(draw))
 
     if fam == 'qwen':
         unet = g.add('UNETLoader', unet_name=F['files']['unet'][1], weight_dtype='default')
@@ -79,12 +91,12 @@ def build(job, variation=0, status=None):
         images = {'image1': out(canvas)}
         for i, r in enumerate(refs[:2]):
             images[f'image{i + 2}'] = out(r)
-        pos = g.add('EAQwenEditEncode', clip=out(clip), prompt=job['prompt'], ref_megapixels=0.0, vae=out(vae), **images)
-        neg = g.add('EAQwenEditEncode', clip=out(clip), prompt=job.get('negative') or '', ref_megapixels=0.0, vae=out(vae), **images)
+        mp = 1.0 if worn else 0.0
+        pos = g.add('EAQwenEditEncode', clip=out(clip), prompt=job['prompt'], ref_megapixels=mp, vae=out(vae), **images)
+        neg = g.add('EAQwenEditEncode', clip=out(clip), prompt=job.get('negative') or '', ref_megapixels=mp, vae=out(vae), **images)
         pos = g.add('FluxKontextMultiReferenceLatentMethod', conditioning=out(pos), reference_latents_method='index_timestep_zero')
         neg = g.add('FluxKontextMultiReferenceLatentMethod', conditioning=out(neg), reference_latents_method='index_timestep_zero')
-        lat = g.add('VAEEncode', pixels=out(canvas), vae=out(vae))
-        lat = g.add('SetLatentNoiseMask', samples=out(lat), mask=out(draw))
+        lat = latent(out(vae), 'EmptySD3LatentImage')
         s = g.add('KSampler', model=out(m), seed=seed, steps=int(q['steps']), cfg=float(cfg), sampler_name='euler',
                   scheduler='simple', positive=out(pos), negative=out(neg), latent_image=out(lat), denoise=1.0)
         img = g.add('VAEDecode', samples=out(s), vae=out(vae))
@@ -116,10 +128,13 @@ def build(job, variation=0, status=None):
         ref_inputs = {'images.image0': out(canvas)}
         for i, r in enumerate(refs):
             ref_inputs[f'images.image{i + 1}'] = out(r)
-        ref = g.add('ReferenceMultiLatent', positive=out(pos), negative=out(neg), vae=out(vae),
-                    resolution='keep resolution', **ref_inputs)
-        lat = g.add('VAEEncode', pixels=out(canvas), vae=out(vae))
-        lat = g.add('SetLatentNoiseMask', samples=out(lat), mask=out(draw))
+        if worn:
+            ref = g.add('ReferenceMultiLatent', positive=out(pos), negative=out(neg), vae=out(vae),
+                        resolution='resize', **{'resolution.megapixels': 1.5}, **ref_inputs)
+        else:
+            ref = g.add('ReferenceMultiLatent', positive=out(pos), negative=out(neg), vae=out(vae),
+                        resolution='keep resolution', **ref_inputs)
+        lat = latent(out(vae), 'EmptyFlux2LatentImage')
         s = g.add('KSampler', model=out(m), seed=seed, steps=steps, cfg=cfg, sampler_name='euler', scheduler='simple',
                   positive=out(ref, 0), negative=out(ref, 1), latent_image=out(lat), denoise=1.0)
         img = g.add('VAEDecode', samples=out(s), vae=out(vae))
@@ -136,8 +151,7 @@ def build(job, variation=0, status=None):
         for i, r in enumerate(refs):
             ref_inputs[f'images.image_{i + 2}'] = out(r)
         refd = g.add('HiDreamO1ReferenceImages', positive=out(pos), negative=out(neg), **ref_inputs)
-        lat = g.add('VAEEncode', pixels=out(canvas), vae=out(ck, 2))
-        lat = g.add('SetLatentNoiseMask', samples=out(lat), mask=out(draw))
+        lat = latent(out(ck, 2), 'EmptyHiDreamO1LatentImage')
         sampler = g.add('KSamplerSelect', sampler_name='dpmpp_2m_sde_gpu')
         sig = g.add('BasicScheduler', model=out(ns), scheduler='normal', steps=int(q['steps']), denoise=1.0)
         s = g.add('SamplerCustom', model=out(m), add_noise=True, noise_seed=seed, cfg=float(q.get('cfg', 5.0)),

@@ -64,16 +64,24 @@ def create(req):
     fw, fh = frame_for(family, aspect, quality)
     ow, oh = output_size(aspect, int(req.get('output_long') or 2400))
     s = dict(req.get('scene') or {})
-    mode = req.get('product_mode', 'exact')
-    hold = 0.0 if mode == 'exact' else 0.35
+    worn = s.get('pose') in scene.WORN or req.get('product_mode') == 'reference'
+    mode = 'reference' if worn else req.get('product_mode', 'exact')
+    if mode not in ('exact', 'relit', 'reference'):
+        mode = 'exact'
     backdrop = np.array(p.get('backdrop') or [0.9, 0.9, 0.9], np.float32)
-    canvas, draw, L = composite.model_inputs(fg, alpha, cover, place, fw, fh, backdrop, product_hold=hold,
-                                             cover_free=float(req.get('cover_free', 1.0)))
     jid = new_id('j')
     d = folder(jid)
     os.makedirs(d, exist_ok=True)
-    save_png(os.path.join(d, 'canvas.png'), canvas)
-    save_png(os.path.join(d, 'draw.png'), draw)
+    if mode == 'reference':
+        # the model draws the product from this picture: the cut-out on its backdrop, cropped to it
+        save_png(os.path.join(d, 'product.png'), product_picture(fg, alpha, backdrop))
+        ow, oh = fw, fh
+    else:
+        hold = 0.0 if mode == 'exact' else 0.35
+        canvas, draw, L = composite.model_inputs(fg, alpha, cover, place, fw, fh, backdrop, product_hold=hold,
+                                                 cover_free=float(req.get('cover_free', 1.0)))
+        save_png(os.path.join(d, 'canvas.png'), canvas)
+        save_png(os.path.join(d, 'draw.png'), draw)
     refs = []
     for i, rid in enumerate((req.get('refs') or [])[:FAMILIES[family]['max_refs']]):
         rp = reference_file(rid)
@@ -84,7 +92,7 @@ def create(req):
                 r = resize(r, r.shape[1] * sc, r.shape[0] * sc)
             save_png(os.path.join(d, f'ref{i + 1}.png'), r)
             refs.append(rid)
-    text = req.get('prompt') or scene.prompt(s, p, family)
+    text = req.get('prompt') or scene.prompt(s, p, family, refs=len(refs))
     neg = req.get('negative') if req.get('negative') is not None else scene.negative(s)
     seed = int(req.get('seed') if req.get('seed') not in (None, '') else int(time.time() * 1000) % 2**32)
     j = {
@@ -96,6 +104,20 @@ def create(req):
     }
     write_json(os.path.join(d, 'job.json'), j)
     return j
+
+
+def product_picture(fg, alpha, backdrop, megapixels=2.0):
+    """The product cut out on a plain backdrop, cropped to it with a margin, at most `megapixels`."""
+    x0, y0, x1, y1 = composite.product_box(alpha)
+    h, w = alpha.shape
+    m = int(0.06 * max(x1 - x0, y1 - y0)) + 8
+    x0, y0, x1, y1 = max(0, x0 - m), max(0, y0 - m), min(w, x1 + m), min(h, y1 + m)
+    a = alpha[y0:y1, x0:x1, None]
+    pic = backdrop[None, None, :] * (1 - a) + fg[y0:y1, x0:x1] * a
+    sc = min(1.0, (megapixels * 1024 * 1024 / (pic.shape[0] * pic.shape[1])) ** 0.5)
+    if sc < 1:
+        pic = resize(pic, pic.shape[1] * sc, pic.shape[0] * sc)
+    return np.clip(pic, 0, 1)
 
 
 def reference_file(rid):
@@ -120,10 +142,15 @@ def finish(jid, generated, index=0):
     """Paste the product back on a generated picture and save the result files."""
     t0 = time.time()
     j = load(jid)
-    p, fg, alpha, cover = _product_layers(j['product'])
     ow, oh = j['output']
-    final, L, paste = composite.paste_back(generated, fg, alpha, cover, j['place'], ow, oh,
-                                           mode='relit' if j.get('product_mode') == 'relit' else 'exact')
+    if j.get('product_mode') == 'reference':
+        p = products.load(j['product'])
+        final, paste = np.clip(generated, 0, 1), None
+        oh, ow = final.shape[:2]
+    else:
+        p, fg, alpha, cover = _product_layers(j['product'])
+        final, L, paste = composite.paste_back(generated, fg, alpha, cover, j['place'], ow, oh,
+                                               mode='relit' if j.get('product_mode') == 'relit' else 'exact')
     day = time.strftime('%Y-%m-%d')
     preset = j['scene'].get('preset') or j['scene'].get('pose') or 'scene'
     base = '-'.join(x for x in [safe_name(p.get('name'), 'product').lower(), safe_name(preset), j['family'], str(j['seed'] + index)] if x)
@@ -135,11 +162,13 @@ def finish(jid, generated, index=0):
         name = f'{base}-{n}'; n += 1
     save_png(os.path.join(out_dir, name + '.png'), final, compress=3)
     save_png(os.path.join(out_dir, name + '-raw.png'), np.clip(generated, 0, 1), compress=3)
-    save_png(os.path.join(out_dir, name + '-parts.png'), composite.parts_map(paste))
+    if paste is not None:
+        save_png(os.path.join(out_dir, name + '-parts.png'), composite.parts_map(paste))
     th = resize(final, 640, int(640 * oh / ow))
     save_jpg(os.path.join(out_dir, name + '-thumb.jpg'), th, quality=85)
     info = {k: j[k] for k in ('id', 'product', 'product_name', 'family', 'quality', 'place', 'scene', 'prompt', 'negative',
                               'frame', 'output', 'product_mode', 'refs', 'name', 'batch')}
+    info['output'] = [int(ow), int(oh)]
     info.update({'job': jid, 'seed': j['seed'] + index, 'variation': index, 'result': name, 'day': day,
                  'finished': now_iso(), 'paste_seconds': round(time.time() - t0, 2)})
     write_json(os.path.join(out_dir, name + '.json'), info)
@@ -147,7 +176,7 @@ def finish(jid, generated, index=0):
     j['results'].append(rel)
     write_json(file_path(jid, 'job.json'), j)
     return {'id': rel, 'url': f'/ea/data/results/{rel}.png', 'thumb': f'/ea/data/results/{rel}-thumb.jpg',
-            'raw': f'/ea/data/results/{rel}-raw.png', 'parts': f'/ea/data/results/{rel}-parts.png',
+            'raw': f'/ea/data/results/{rel}-raw.png', 'parts': f'/ea/data/results/{rel}-parts.png' if paste is not None else None,
             'family': j['family'], 'seed': j['seed'] + index, 'batch': j.get('batch', '')}
 
 
@@ -167,7 +196,8 @@ def list_results(limit=500, batch=None):
                 continue
             rel = f'{day}/{f[:-5]}'
             info['urls'] = {'final': f'/ea/data/results/{rel}.png', 'thumb': f'/ea/data/results/{rel}-thumb.jpg',
-                            'raw': f'/ea/data/results/{rel}-raw.png', 'parts': f'/ea/data/results/{rel}-parts.png'}
+                            'raw': f'/ea/data/results/{rel}-raw.png',
+                            'parts': f'/ea/data/results/{rel}-parts.png' if os.path.exists(os.path.join(dd, f[:-5] + '-parts.png')) else None}
             info['rid'] = rel
             out.append(info)
             if len(out) >= limit:

@@ -9,6 +9,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const gb = (b) => (b / 1e9).toFixed(1) + ' GB';
 
 const FAMILY_ORDER = ['flux3', 'qwen', 'hidream'];
+const WORN = new Set(['worn-hands', 'worn-head', 'worn-torso', 'worn-guard']);
+const isWorn = () => WORN.has(S.scene.pose);
 const KIND_LABELS = { instrument: 'Sword or trainer', gloves: 'Gloves', mask: 'Mask', jacket: 'Jacket', other: 'Other' };
 
 const S = {
@@ -277,18 +279,26 @@ function renderPoses() {
   if (!list.find((p) => p.id === S.scene.pose)) S.scene.pose = list[0].id;
   syncPose = seg($('#segPose'), list, S.scene.pose, (v, sync) => { S.scene.pose = v; sync(v); sceneChanged(); });
 }
+function presetsFor(product) {
+  const kind = product?.kind || 'instrument';
+  return S.options.presets.filter((p) => p.kind === 'any' || p.kind === kind || (p.kind === 'worn' && kind !== 'instrument'));
+}
 function renderPresets() {
   if (!S.options) return;
-  const kind = poseKind();
-  const list = S.options.presets.filter((p) => p.kind === 'any' || (p.kind === 'instrument') === (kind === 'instrument')).map((p) => ({ id: p.id, label: p.label }));
+  const list = presetsFor(S.product).map((p) => ({ id: p.id, label: p.label }));
   syncPreset = seg($('#segPreset'), list, S.scene.preset, async (v, sync) => {
     const pr = S.options.presets.find((p) => p.id === v);
     S.scene = { ...S.scene, ...pr.scene, preset: v, place_text: '' };
     sync(v); renderScene(); sceneChanged();
-    await autoPlace(v, pr.layout.aspect);
+    if (pr.mode === 'reference') { S.place.aspect = pr.layout.aspect; syncAspect(S.place.aspect); stage.setPlace(S.place); }
+    else await autoPlace(v, pr.layout.aspect);
   });
 }
 function sceneChanged() {
+  const worn = isWorn();
+  $('#stageWrap').classList.toggle('worn', worn);
+  $('#wornNote').hidden = !worn;
+  for (const id of ['#btnPointUp', '#btnCentre', '#inRotation', '#inLength']) $(id).disabled = worn;
   $('#rowSide').hidden = !(['hand', 'hands'].includes(S.scene.people) || ['held-up', 'in-hand'].includes(S.scene.pose));
   $('#rowFraming').hidden = !['fencer', 'pair'].includes(S.scene.people);
   store('scene', S.scene);
@@ -417,13 +427,15 @@ async function openViewer(rid) {
   show('final');
   $('#vTitle').textContent = `${r.product_name || ''} · ${FAMILY_SHORT[r.family] || r.family} · seed ${r.seed}`;
   $('#vDownload').href = r.urls.final; $('#vDownload').download = r.result + '.png';
-  $('#vDownloadParts').href = r.urls.parts; $('#vDownloadParts').download = r.result + '-parts.png';
+  $('#vDownloadParts').hidden = !r.urls.parts;
+  $('#segViewer button[data-v="parts"]').hidden = !r.urls.parts;
+  if (r.urls.parts) { $('#vDownloadParts').href = r.urls.parts; $('#vDownloadParts').download = r.result + '-parts.png'; }
   const sc = r.scene || {};
   $('#vInfo').innerHTML = `
     <p><span class="k">File</span><br>data/results/${esc(r.rid)}.png</p>
     <p><span class="k">Model</span><br>${esc(S.status?.models?.[r.family]?.name || r.family)}, ${esc(r.quality)}; seed ${r.seed}</p>
     <p><span class="k">Size</span><br>${r.output[0]} × ${r.output[1]} px (the model drew at ${r.frame[0]} × ${r.frame[1]})</p>
-    <p><span class="k">The product</span><br>${r.product_mode === 'relit' ? 'Exact detail, the scene\'s light' : 'Exact pixels'}</p>
+    <p><span class="k">The product</span><br>${r.product_mode === 'reference' ? 'Drawn by the model from the photo (worn gear): close, not exact' : r.product_mode === 'relit' ? 'Exact detail, the scene\'s light' : 'Exact pixels'}</p>
     <p><span class="k">Prompt</span><br>${esc(r.prompt)}</p>
     ${r.negative ? `<p><span class="k">Avoid</span><br>${esc(r.negative)}</p>` : ''}
     <p class="hint">The parts map paints the product in Product red for Tuned by part: open both there, or crop them the same way first.</p>`;
@@ -471,8 +483,7 @@ let cmpPresets = recall('cmpPresets', ['cover', 'guard', 'table']);
 let cmpModels = recall('cmpModels', FAMILY_ORDER);
 function renderCompareSetup() {
   if (!S.options) return;
-  const kind = poseKind();
-  const presets = S.options.presets.filter((p) => p.kind === 'any' || (p.kind === 'instrument') === (kind === 'instrument'));
+  const presets = presetsFor(S.product);
   seg($('#cmpPresets'), presets.map((p) => ({ id: p.id, label: p.label })), cmpPresets, (v, sync) => {
     cmpPresets = cmpPresets.includes(v) ? cmpPresets.filter((x) => x !== v) : [...cmpPresets, v]; sync(cmpPresets); store('cmpPresets', cmpPresets);
   }, { multi: true });
@@ -510,7 +521,7 @@ $('#btnCompare').addEventListener('click', async () => {
   $('#cmpGrid').innerHTML = ''; $('#cmpGrid').append(table);
   for (const pid of cmpPresets) {
     const pr = S.options.presets.find((p) => p.id === pid); if (!pr) continue;
-    const place = (await api(`/ea/api/products/${S.product.id}/place?preset=${pid}`)).place;
+    const place = pr.mode === 'reference' ? { ...S.place, aspect: pr.layout.aspect } : (await api(`/ea/api/products/${S.product.id}/place?preset=${pid}`)).place;
     const sceneP = { ...S.scene, ...pr.scene, preset: pid, place_text: '', extra: '' };
     const r = await api('/ea/api/jobs', { json: request({ families: fams, scene: sceneP, place, variations: seeds, seed, quality, batch, prompt: null, refs: [] }) });
     const tr = document.createElement('tr');

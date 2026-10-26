@@ -172,3 +172,7 @@ dialog::backdrop { background: rgba(31, 27, 22, 0.55); }
 
 .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--ink); color: var(--sub); padding: 10px 16px; border-radius: 10px; font-size: 15px; max-width: 80vw; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25); z-index: 30; }
 .toast.err { background: var(--verm); }
+
+.wornnote { position: absolute; left: 50%; top: 18px; transform: translateX(-50%); max-width: min(560px, 90%); padding: 10px 14px; background: rgba(250, 248, 243, 0.95); border: 1px solid var(--line-strong); border-radius: 10px; font-size: 15px; z-index: 2; }
+.stagewrap.worn .frame canvas { opacity: 0.35; }
+.viewtools button:disabled, .viewtools input:disabled { opacity: 0.4; cursor: default; }

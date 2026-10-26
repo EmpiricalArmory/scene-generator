@@ -51,8 +51,15 @@ POSES = {
         ('hanging', 'Hanging on a peg'),
         ('in-hand', 'Held in a hand'),
         ('with-kit', 'With other kit on a bench'),
+        ('worn-hands', 'Worn: hands and forearms'),
+        ('worn-head', 'Worn: head and shoulders'),
+        ('worn-torso', 'Worn: the torso'),
+        ('worn-guard', 'Worn: in a guard, full figure'),
     ],
 }
+
+# Poses where the gear is worn: the model draws it from the photo (it cannot be pasted back exactly).
+WORN = {'worn-hands', 'worn-head', 'worn-torso', 'worn-guard'}
 
 HEIGHTS = [
     ('low', 'Low', 'from a low angle, looking slightly up'),
@@ -90,10 +97,26 @@ PRESETS = [
     {'id': 'table', 'label': 'On the table', 'kind': 'any',
      'scene': {'pose': 'lying', 'people': 'none', 'place': 'oak-table', 'light': 'window', 'height': 'overhead', 'lens': '50', 'aperture': '11'},
      'layout': {'aspect': '4:5', 'cx': 0.5, 'cy': 0.5, 'length': 0.82, 'point': 'diagonal'}},
+    {'id': 'worn-hands', 'label': 'Worn: hands', 'kind': 'gloves', 'mode': 'reference',
+     'scene': {'pose': 'worn-hands', 'people': 'fencer', 'place': 'paper', 'light': 'studio', 'height': 'eye', 'lens': '85', 'aperture': '5.6'},
+     'layout': {'aspect': '1:1'}},
+    {'id': 'worn-head', 'label': 'Worn: head and shoulders', 'kind': 'mask', 'mode': 'reference',
+     'scene': {'pose': 'worn-head', 'people': 'fencer', 'place': 'paper', 'light': 'studio', 'height': 'eye', 'lens': '85', 'aperture': '5.6'},
+     'layout': {'aspect': '1:1'}},
+    {'id': 'worn-torso', 'label': 'Worn: the torso', 'kind': 'jacket', 'mode': 'reference',
+     'scene': {'pose': 'worn-torso', 'people': 'fencer', 'place': 'paper', 'light': 'studio', 'height': 'eye', 'lens': '85', 'aperture': '5.6'},
+     'layout': {'aspect': '1:1'}},
+    {'id': 'worn-guard', 'label': 'Worn: in a guard', 'kind': 'worn', 'mode': 'reference',
+     'scene': {'pose': 'worn-guard', 'people': 'fencer', 'place': 'salle', 'light': 'window', 'height': 'eye', 'lens': '50', 'aperture': '2.8', 'framing': 'full'},
+     'layout': {'aspect': '4:5'}},
     {'id': 'studio', 'label': 'Studio, cream paper', 'kind': 'any',
      'scene': {'pose': 'lying', 'people': 'none', 'place': 'paper', 'light': 'studio', 'height': 'overhead', 'lens': '85', 'aperture': '11'},
      'layout': {'aspect': '1:1', 'cx': 0.5, 'cy': 0.5, 'length': 0.7, 'point': 'keep'}},
 ]
+
+
+def cap(text):
+    return text[:1].upper() + text[1:]
 
 
 def _pick(table, key, default=None):
@@ -133,36 +156,84 @@ def _subject(s, noun, kind):
     the = 'the ' + noun
     if pose == 'held-up':
         if people in ('hand', 'hands', 'none'):
-            return (f'{the.capitalize()} stands upright where it is, point up, held by one hand in a black padded fencing glove '
+            return (f'{cap(the)} stands upright where it is, point up, held by one hand in a black padded fencing glove '
                     f'that comes in from the {side} edge of the frame and grips the handle just below the cross guard; only the '
                     f'gloved hand and the forearm, in the sleeve of a black fencing jacket, come into the frame')
         return f'A fencer in {KIT} holds {the} upright where it is, point up, the gloved hands on the handle, {framing}'
     if pose == 'guard':
         who = 'two fencers, each in ' + KIT + ',' if people == 'pair' else 'a fencer in ' + KIT + ','
-        return (f'{who[0].upper() + who[1:]} holds {the} where it is with both gloved hands on the handle, in a fencing guard, '
+        return (f'{cap(who)} holds {the} where it is with both gloved hands on the handle, in a fencing guard, '
                 f'{framing}; the body turned to match the angle of the blade')
     if pose == 'shoulder':
         return f'A fencer in {KIT} rests {the} on the shoulder where it is, one gloved hand on the handle, {framing}'
     if pose == 'palms':
-        return f'{the.capitalize()} lies across two open hands in black padded fencing gloves, presented to the camera, only the hands and forearms in the frame'
+        return f'{cap(the)} lies across two open hands in black padded fencing gloves, presented to the camera, only the hands and forearms in the frame'
     if pose == 'leaning':
-        return f'{the.capitalize()} leans against the wall where it is, point up, its pommel resting on the floor, nobody in the frame'
+        return f'{cap(the)} leans against the wall where it is, point up, its pommel resting on the floor, nobody in the frame'
     if pose == 'hanging':
-        return f'{the.capitalize()} hangs from a wooden peg on the wall where it is, nobody in the frame'
+        return f'{cap(the)} hangs from a wooden peg on the wall where it is, nobody in the frame'
     if pose == 'in-hand':
-        return f'{the.capitalize()} is held where it is by one bare hand that comes in from the {side} edge of the frame, only the hand and the wrist in the frame'
+        return f'{cap(the)} is held where it is by one bare hand that comes in from the {side} edge of the frame, only the hand and the wrist in the frame'
     if pose == 'with-kit':
-        return f'{the.capitalize()} lies where it is on a wooden bench, beside a black fencing mask and a rolled black fencing jacket, nobody in the frame'
+        return f'{cap(the)} lies where it is on a wooden bench, beside a black fencing mask and a rolled black fencing jacket, nobody in the frame'
     # lying
     if people in ('hand', 'hands'):
-        return f'{the.capitalize()} lies where it is on the surface, one gloved hand resting beside it'
-    return f'{the.capitalize()} lies where it is on the surface, with a soft natural shadow under it, nobody in the frame'
+        return f'{cap(the)} lies where it is on the surface, one gloved hand resting beside it'
+    return f'{cap(the)} lies where it is on the surface, with a soft natural shadow under it, nobody in the frame'
 
 
-def prompt(s, product, family='qwen'):
+def kit_for(kind):
+    """The fencer's kit, leaving out the piece that is the product."""
+    parts = {'jacket': 'a padded black fencing jacket', 'gloves': 'black padded gloves',
+             'mask': 'a black fencing mask whose mesh hides the whole face'}
+    keep = [v for k, v in parts.items() if k != kind]
+    if len(keep) == 1:
+        return 'black HEMA kit: ' + keep[0]
+    if len(keep) == 2:
+        return 'black HEMA kit: ' + keep[0] + ' and ' + keep[1]
+    return 'black HEMA kit: ' + ', '.join(keep[:-1]) + ', and ' + keep[-1]
+
+
+def worn_prompt(s, product, refs=0):
+    """For gear the model draws from the photo: the first picture shows the product; any more are style references."""
+    noun = noun_of(product)
+    kind = product.get('kind') or 'other'
+    pose = s.get('pose', 'worn-guard')
+    place = s.get('place_text') or _pick(PLACES, s.get('place', 'paper'))[2]
+    light = s.get('light_text') or _pick(LIGHTS, s.get('light', 'studio'))[2]
+    height = _pick(HEIGHTS, s.get('height', 'eye'))[2]
+    lens = _pick(LENSES, s.get('lens', '85'))[1]
+    aperture = _pick(APERTURES, s.get('aperture', '5.6'))[2]
+    kit = kit_for(kind)
+    the = 'the ' + noun
+    who = {
+        'worn-hands': f'the hands and forearms of a fencer in {kit}, wearing {the} from the first picture, both hands closed on the handle of a steel training sword held in front of the body; the frame cropped to the hands and forearms',
+        'worn-head': f'the head and shoulders of a fencer in {kit}, wearing {the} from the first picture, turned three-quarters to the camera',
+        'worn-torso': f'a fencer in {kit}, wearing {the} from the first picture, framed from the hips to the top of the head, standing turned slightly to the camera',
+        'worn-guard': f'a fencer in {kit}, wearing {the} from the first picture, standing in a fencing guard with a steel training sword, the whole figure in the frame',
+    }.get(pose, f'a fencer in {kit}, wearing {the} from the first picture')
+    parts = [
+        f'Create a photograph of {who}',
+        ('Behind the fencer, ' + place) if 'paper' not in s.get('place', '') and not s.get('place_text') else f'The setting: {place}',
+        'Light: ' + light,
+        f'Shot {height} with {"an" if lens.startswith("8") else "a"} {lens} lens {aperture}',
+        'Natural, muted colours and true-to-life textures, as in an unretouched photograph; no text',
+    ]
+    if refs:
+        parts.append('Take the photographic look, light and colour from the ' + ('second picture' if refs == 1 else 'other pictures') + ', not their content')
+    if s.get('extra'):
+        parts.append(s['extra'].strip().rstrip('.'))
+    parts.append(f'{cap(the)} must look exactly as in the first picture: the same shape, colours, materials, panels, padding, stitching and any labels')
+    parts.append('The face stays hidden behind ' + ('that fencing mask' if kind == 'mask' else 'a black fencing mask'))
+    return '. '.join(p.strip().rstrip('.') for p in parts if p) + '.'
+
+
+def prompt(s, product, family='qwen', refs=0):
     """The prompt for a scene `s` (a dict of setting ids) and a product (its json)."""
     if s.get('custom'):
         return s['custom'].strip()
+    if s.get('pose') in WORN:
+        return worn_prompt(s, product, refs)
     noun = noun_of(product)
     kind = product.get('kind') or 'other'
     place = s.get('place_text') or _pick(PLACES, s.get('place', 'brick'))[2]
