@@ -392,7 +392,10 @@ def cut_out_view(pid, vid, method='auto', mask=None):
     _thumb(os.path.join(d, 'thumb.jpg'), fg, alpha, size=320)
     p = load(pid)
     v = _view(p, vid)
-    v['cutout'] = {'method': used, 'at': now_iso(), 'box': list(composite.product_box(alpha))}
+    edges = composite.open_edges(alpha)
+    v['cutout'] = {'method': used, 'at': now_iso(), 'box': list(composite.product_box(alpha)), 'open_edges': edges}
+    if not v.get('shows_set'):
+        v['shows'] = 'detail' if edges else 'whole'      # a photo that cuts the product off is a close-up
     v['rev'] = int(v.get('rev', 0)) + 1
     save(p)
     return {'product': pid, 'view': vid, 'method': used}
@@ -405,6 +408,9 @@ def update_view(pid, vid, body):
         v['label'] = str(body['label'] or '')[:80]
     if 'use' in body:
         v['use'] = bool(body['use'])
+    if body.get('shows') in ('whole', 'detail'):
+        v['shows'] = body['shows']
+        v['shows_set'] = True
     save(p)
     return p
 
@@ -429,13 +435,38 @@ def main_reference(pid):
     return path
 
 
-def reference_files(pid, limit=None):
-    """The product's pictures for a model, main photo first, then the other photos ticked for use."""
+def reference_set(pid):
+    """The product's pictures for a model, as (path, shows): the main photo first, then the other photos
+    ticked for use that show the whole product, then the close-ups."""
     p = load(pid)
-    out = [main_reference(pid)]
+    main_shows = 'detail' if (p.get('cutout') or {}).get('open_edges') else 'whole'
+    whole, detail = [(main_reference(pid), main_shows)], []
+    changed = False
+    for v in p.get('views', []):
+        if v.get('cutout') and not v.get('shows'):          # cut out before views knew what they show
+            mpath = os.path.join(view_folder(pid, v['id']), 'mask.png')
+            if os.path.exists(mpath):
+                edges = composite.open_edges(load_gray(mpath))
+                v['cutout']['open_edges'] = edges
+                v['shows'] = 'detail' if edges else 'whole'
+                changed = True
+    if changed:
+        save(p)
     for v in p.get('views', []):
         if v.get('use', True) and v.get('cutout'):
             path = os.path.join(view_folder(pid, v['id']), 'ref.png')
             if os.path.exists(path):
-                out.append(path)
+                (detail if v.get('shows') == 'detail' else whole).append((path, v.get('shows') or 'whole'))
+    return whole + detail
+
+
+def reference_files(pid, limit=None):
+    out = [path for path, _ in reference_set(pid)]
     return out[:limit] if limit else out
+
+
+HILT = {'instrument': 'sword hilt'}       # a closer look in the detail pass, by kind
+
+
+def hilt_term(p):
+    return HILT.get(p.get('kind'))

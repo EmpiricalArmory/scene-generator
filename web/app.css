@@ -190,7 +190,10 @@ dialog::backdrop { background: rgba(31, 27, 22, 0.55); }
 .view { position: relative; margin: 0; border: 1px solid var(--line); border-radius: 8px; padding: 4px; background: #fff; display: grid; gap: 3px; }
 .view img { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; background: #ece6d8; border-radius: 4px; }
 .view figcaption { font-size: 12px; line-height: 1.2; color: var(--faded); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view .vrow { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
 .view .use { font-size: 12px; color: var(--faded); display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+.view .shows { font: 500 11px/1.2 var(--cabin); color: var(--faded); background: transparent; border: 1px solid var(--line-strong); border-radius: 999px; padding: 1px 6px; cursor: pointer; }
+.view .shows:hover { color: var(--ink); border-color: var(--ink); }
 .view .use input { margin: 0; accent-color: var(--ink); }
 .view .x { position: absolute; right: 2px; top: 2px; width: 24px; height: 24px; font-size: 16px; background: rgba(250, 248, 243, 0.9); }
 .view .badge { position: absolute; left: 6px; top: 6px; font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--ink); color: var(--sub); }

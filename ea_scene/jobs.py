@@ -114,11 +114,14 @@ def create(req):
     max_pics = F['pictures']
     guide = None
     if mode == 'natural':
-        views_all = products.reference_files(p['id'])
-        style_slots = min(len(style_ids), max(1, max_pics // 3)) if style_ids else 0
-        n_views = max(1, min(len(views_all), max_pics - style_slots))
-        for i, path in enumerate(views_all[:n_views]):
+        # every photo of the product is saved for the job (whole views first, then close-ups); the first
+        # pass takes as many as fit, and the detail passes pick their own
+        refset = products.reference_set(p['id'])[:products.MAX_VIEWS + 1]
+        view_shows = [shows for _, shows in refset]
+        for i, (path, _) in enumerate(refset):
             save_png(os.path.join(d, f'view{i + 1}.png'), _fit_mp(load_rgb(path), 1.0), compress=3)
+        style_slots = min(len(style_ids), max(1, max_pics // 3)) if style_ids else 0
+        n_views = max(1, min(len(refset), max_pics - style_slots))
         n_style = min(len(style_ids), max_pics - n_views)
         if req.get('guide'):
             _, fg, alpha, _ = products.layers(p['id'])
@@ -133,6 +136,7 @@ def create(req):
         save_png(os.path.join(d, 'harmonize.png'), harmonize_mask(L, fw, fh))
         save_png(os.path.join(d, 'view1.png'), _fit_mp(load_rgb(products.main_reference(p['id'])), 1.0), compress=3)
         n_views = 1
+        view_shows = ['whole']
         n_style = min(len(style_ids), F['max_refs'], max_pics - 1)
     refs = []
     for i, rid in enumerate(style_ids[:n_style]):
@@ -142,7 +146,7 @@ def create(req):
     layout = None
     if guide:
         layout = scene.layout_phrase(p, guide['box'], guide['angle'], cite='<obj_1>' if family == 'flux3' else '')
-    text = req.get('prompt') or scene.prompt(s, p, family, refs=len(refs), mode=mode, views=n_views, layout=layout)
+    text = req.get('prompt') or scene.prompt(s, p, family, refs=len(refs), mode=mode, views=view_shows[:n_views], layout=layout)
     if guide and family == 'flux3':
         text = scene.flux_layout(text, p, guide['box'], n_views)
     style = req.get('style') or None
@@ -155,19 +159,28 @@ def create(req):
 
     det = dict(req.get('detail') or {})
     have_sam = models._have(*models.SAM3)
+    k = max(1, min(len(view_shows), max_pics - 1))           # the product's photos beside the crop
     detail = {
         'on': bool(det.get('on', True)) and mode == 'natural' and have_sam,
-        'strength': float(min(0.9, max(0.15, float(det.get('strength', 0.5))))),
+        'strength': float(min(0.9, max(0.15, float(det.get('strength', DETAIL_STRENGTH))))),
         'megapixels': F['detail_mp']['draft' if quality == 'draft' else 'final'],
-        'views': max(1, min(n_views, max_pics - 1)),
+        'views': k, 'view_index': list(range(k)),
     }
-    detail['prompt'] = scene.detail_prompt(p, detail['views'])
+    detail['prompt'] = scene.detail_prompt(p, view_shows[:k])
+    term = products.hilt_term(p)
+    hilt = {'on': bool(detail['on'] and term and det.get('hilt', True))}
+    if hilt['on']:
+        # a closer look at a sword's hilt: close-ups first beside it
+        order = [i for i, v in enumerate(view_shows) if v == 'detail'] + [i for i, v in enumerate(view_shows) if v != 'detail']
+        hilt.update(find=term, strength=float(min(0.85, detail['strength'] + 0.1)), megapixels=detail['megapixels'],
+                    view_index=order[:k], prompt=scene.hilt_prompt(p, [view_shows[i] for i in order[:k]]))
+    detail['hilt'] = hilt
     relight = mode == 'exact' and bool(req.get('relight', True))
     upscale = 'seedvr2' if req.get('upscale') == 'seedvr2' and models.have_helper('seedvr2') else 'none'
     j = {
         'id': jid, 'created': now_iso(), 'product': p['id'], 'product_name': p.get('name'), 'family': family,
         'quality': quality, 'place': place, 'scene': s, 'prompt': text, 'negative': neg, 'seed': seed,
-        'frame': [fw, fh], 'output': [ow, oh], 'product_mode': mode, 'views': n_views, 'refs': refs,
+        'frame': [fw, fh], 'output': [ow, oh], 'product_mode': mode, 'views': n_views, 'view_shows': view_shows, 'refs': refs,
         'variations': int(req.get('variations', 1)), 'upsample_prompt': bool(req.get('upsample_prompt')),
         'name': req.get('name') or '', 'batch': req.get('batch') or '', 'results': [],
         'style': style, 'guide': guide, 'detail': detail, 'find': products.find_term(p), 'sam': have_sam,
@@ -179,6 +192,7 @@ def create(req):
 
 
 REF_GREY = products.REF_BACKDROP
+DETAIL_STRENGTH = 0.55          # how much the detail pass may change the product by default
 
 
 def harmonize_mask(L, fw, fh):

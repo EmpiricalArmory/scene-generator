@@ -206,6 +206,46 @@ def _product_pictures(views):
     return 'the first picture' if views <= 1 else f'the first {WORDS[min(views, 10)]} pictures'
 
 
+def _shows(shows):
+    """A list of what each product picture shows ('whole' or 'detail'), from a list or a count."""
+    if isinstance(shows, int):
+        return ['whole'] * max(1, shows)
+    return list(shows) or ['whole']
+
+
+def describe_pictures(noun, shows, first=1):
+    """'The first picture shows the whole longsword; the second and third pictures are close-ups of its details.'
+    Empty when there is one picture only."""
+    shows = _shows(shows)
+    if len(shows) <= 1:
+        return ''
+    runs = []
+    for i, k in enumerate(shows):
+        if runs and runs[-1][0] == k:
+            runs[-1][2] += 1
+        else:
+            runs.append([k, first + i, 1])
+    parts = []
+    for k, start, n in runs:
+        o = _ordinals(start, n)
+        if k == 'detail':
+            parts.append(f'{o} {"is a close-up" if n == 1 else "are close-ups"} of its details')
+        else:
+            parts.append(f'{o} {"shows" if n == 1 else "show"} the whole {noun}' + (' from different sides' if n > 1 else ''))
+    return cap('; '.join(parts))
+
+
+def _whole_pictures(shows):
+    """The pictures that show the whole product, when close-ups follow them ('the first picture')."""
+    shows = _shows(shows)
+    if 'detail' not in shows or shows[0] != 'whole':
+        return ''
+    n = 0
+    while n < len(shows) and shows[n] == 'whole':
+        n += 1
+    return _ordinals(1, n)
+
+
 def _camera(s, default_aperture='2.8'):
     height = _pick(HEIGHTS, s.get('height', 'eye'))[2]
     lens = _pick(LENSES, s.get('lens', '85'))[1]
@@ -236,10 +276,12 @@ def _natural_subject(s, noun, kind, views):
     kit = kit_for(kind)
     if pose == 'held-up':
         if people in ('hand', 'hands', 'none'):
-            return (f'{src}, held upright with its point up by one hand in a black padded fencing glove that comes in from the '
-                    f'{side} edge of the frame and grips the handle just below the cross guard; only the gloved hand and the forearm, '
-                    f'in the sleeve of a black fencing jacket, come into the frame, and {whole}')
-        return f'a fencer in {KIT} holding {src} upright, point up, the gloved hands on the handle, {framing}'
+            return (f'{src}, held upright in one hand: the blade points straight up toward the top of the frame, a black '
+                    f'padded fencing glove that comes in from the {side} edge of the frame grips the handle just below the cross '
+                    f'guard, and the pommel shows below the fist; only the gloved hand and the forearm, in the sleeve of a black '
+                    f'fencing jacket, come into the frame, and {whole}')
+        return (f'a fencer in {KIT} holding {src} upright in front of the body, the blade pointing straight up and the gloved '
+                f'hands on the handle, {framing}')
     if pose == 'guard':
         who = 'two fencers, each in ' + KIT + ',' if people == 'pair' else 'a fencer in ' + KIT + ','
         return f'{who} holding {src} with both gloved hands on the handle in a fencing guard, {framing}'
@@ -271,10 +313,13 @@ def _natural_subject(s, noun, kind, views):
 
 
 def fidelity(product, views):
-    """The sentence that holds the product to its photos."""
+    """The sentence that holds the product to its photos. views: a count, or what each picture shows."""
     noun = noun_of(product)
     kind = product.get('kind') or 'other'
-    text = (f'The {noun} must be exactly the one in {_product_pictures(views)}: the same shape, proportions, colours, '
+    shows = _shows(views)
+    whole = _whole_pictures(shows)
+    shape = f'the same shape and proportions as in {whole}, the same colours' if whole else 'the same shape, proportions, colours'
+    text = (f'The {noun} must be exactly the one in {_product_pictures(len(shows))}: {shape}, '
             f'materials and every detail{DETAIL_PARTS.get(kind, "")}, seen at the angle and size this photograph needs '
             f'and lit by its light')
     mats = (product.get('materials') or '').strip().rstrip('.')
@@ -323,20 +368,23 @@ def flux_layout(prompt_text, product, box, views):
     x0, y0, x1, y1 = box
     q = lambda v: max(0, min(1000, int(round(v * 1000))))
     rows = [{'id': 'obj_1', 'bbox': [q(y0), q(x0), q(y1), q(x1)],
-             'desc': f'the {noun_of(product)} from {_product_pictures(views)}'}]
+             'desc': f'the {noun_of(product)} from {_product_pictures(len(_shows(views)))}'}]
     return prompt_text.rstrip() + ' ' + json.dumps(rows, ensure_ascii=False)
 
 
 def natural_prompt(s, product, views=1, refs=0, layout=None):
-    """For the model drawing the product from its photos: the first `views` pictures show the product,
-    the next `refs` are style references."""
+    """For the model drawing the product from its photos: the first pictures show the product (views: a
+    count, or what each shows, 'whole' or 'detail'), the next `refs` are style references."""
     noun = noun_of(product)
     kind = product.get('kind') or 'other'
+    shows = _shows(views)
+    views = len(shows)
     pose = s.get('pose', 'held-up' if kind == 'instrument' else 'lying')
     place = s.get('place_text') or _pick(PLACES, s.get('place', 'brick'))[2]
     light = s.get('light_text') or _pick(LIGHTS, s.get('light', 'overcast'))[2]
     parts = [
         f'Create a photograph of {_natural_subject(s, noun, kind, views)}',
+        describe_pictures(noun, shows),
         f'The setting: {place}',
         'Light: ' + light,
         _camera(s, '5.6' if pose in WORN else '2.8'),
@@ -348,7 +396,7 @@ def natural_prompt(s, product, views=1, refs=0, layout=None):
         parts.append(f'Take the photographic look, light and colour from {_ordinals(views + 1, refs)}, not {"its" if refs == 1 else "their"} content')
     if s.get('extra'):
         parts.append(s['extra'].strip().rstrip('.'))
-    parts.append(fidelity(product, views))
+    parts.append(fidelity(product, shows))
     if pose in WORN:
         parts.append('The face stays hidden behind ' + ('that fencing mask' if kind == 'mask' else 'a black fencing mask'))
     elif s.get('people', 'none') in ('fencer', 'pair'):
@@ -417,18 +465,43 @@ def exact_prompt(s, product, refs=0):
 
 def detail_prompt(product, views=1):
     """For the detail pass: the first picture is a crop of the made photograph around the product; the
-    next `views` pictures are the product's own photos."""
+    next pictures are the product's own photos (views: a count, or what each shows)."""
     noun = noun_of(product)
     kind = product.get('kind') or 'other'
-    others = _ordinals(2, views)
+    shows = _shows(views)
+    others = _ordinals(2, len(shows))
     mats = (product.get('materials') or '').strip().rstrip('.')
-    text = (f'The first picture is part of a photograph showing the {noun} from {others}. Redraw only the {noun} in the first '
-            f'picture so that it is exactly the one in {others}: the same shape, proportions, colours, materials and every '
-            f'detail{DETAIL_PARTS.get(kind, "")}, sharp and clear')
+    text = f'The first picture is part of a photograph showing the {noun} from {others}. '
+    desc = describe_pictures(noun, shows, first=2)
+    if desc:
+        text += desc + '. '
+    text += (f'Redraw only the {noun} in the first picture so that it is exactly the one in {others}: the same shape, '
+             f'proportions, colours, materials and every detail{DETAIL_PARTS.get(kind, "")}, sharp and clear')
     if mats:
         text += f', made of {mats}'
     text += ('. Keep its position, angle, size and perspective in the first picture, the hands holding it, everything '
              'around it, and the photograph\'s light, shadows, reflections and colours as they are.')
+    return text
+
+
+def hilt_prompt(product, views=1):
+    """For the closer look at a sword's hilt: the first picture is a close crop of the made photograph around
+    the hilt; the next are the product's own photos, close-ups first."""
+    noun = noun_of(product)
+    shows = _shows(views)
+    others = _ordinals(2, len(shows))
+    mats = (product.get('materials') or '').strip().rstrip('.')
+    text = f'The first picture is a close crop of a photograph, showing the hilt of the {noun} from {others}: its cross guard, grip and pommel. '
+    desc = describe_pictures(noun, shows, first=2)
+    if desc:
+        text += desc + '. '
+    text += (f'Redraw only the hilt in the first picture so that it is exactly the one in {others}: the same cross guard and '
+             f'the shape of its ends, the same grip with its wrap and any ring or collar on it, and the same pommel, its shape '
+             f'and every facet, sharp and clear')
+    if mats:
+        text += f', made of {mats}'
+    text += ('. Keep its position, angle, size and perspective in the first picture, the hand holding it, the blade and '
+             'everything around it, and the photograph\'s light, shadows and reflections as they are.')
     return text
 
 
@@ -451,7 +524,8 @@ def angle_prompt(angle_id):
 
 
 def prompt(s, product, family='qwen', refs=0, mode='natural', views=1, layout=None):
-    """The prompt for a scene `s` (a dict of setting ids) and a product (its json)."""
+    """The prompt for a scene `s` (a dict of setting ids) and a product (its json). views: how many of the
+    product's pictures the model gets, or what each shows ('whole' or 'detail')."""
     if s.get('custom'):
         return s['custom'].strip()
     if mode == 'exact' and s.get('pose') not in WORN:

@@ -294,10 +294,11 @@ async def prompt_text(request):
     body = await request.json()
     try:
         p = products.load(body['product'])
-        n_views = len(products.reference_files(p['id'])) if p.get('cutout') else 1
+        shows = [s for _, s in products.reference_set(p['id'])] if p.get('cutout') else ['whole']
     except Exception:
         p = {'kind': body.get('kind', 'instrument'), 'noun': body.get('noun', '')}
-        n_views = 1
+        shows = ['whole']
+    n_views = len(shows)
     fam = body.get('family') or 'qwen'
     F = models.FAMILIES.get(fam, models.FAMILIES['qwen'])
     s = body.get('scene') or {}
@@ -309,7 +310,7 @@ async def prompt_text(request):
         style_slots = min(n_refs, max(1, F['pictures'] // 3)) if n_refs else 0
         views = max(1, min(n_views, F['pictures'] - style_slots))
         refs = min(n_refs, F['pictures'] - views)
-    return web.json_response({'prompt': scene.prompt(s, p, fam, refs=refs, mode=mode, views=views),
+    return web.json_response({'prompt': scene.prompt(s, p, fam, refs=refs, mode=mode, views=shows[:views]),
                               'negative': scene.negative(s), 'views': views, 'refs': refs})
 
 

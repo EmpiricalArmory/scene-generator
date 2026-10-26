@@ -199,6 +199,21 @@ def seedvr2(g, image, width, height, seed):
     return out(g.add('SeedVR2PostProcessing', images=out(dec), original_resized_images=out(r), color_correction_method='lab'))
 
 
+def detail_pass(g, kit, image, term, settings, photos, neg, seed, ow, oh, base=None, margin=0.1, max_aspect=2.0):
+    """Find `term` in the picture, cut the area around it out and enlarge it, redraw it at part strength with
+    the product's photos beside it, and blend it back into `base` (the picture itself if not given) at the
+    output size."""
+    strength = float(settings['strength'])
+    found = sam_find(g, image, term)
+    crop = g.add('EADetailCrop', image=image, mask=found, megapixels=float(settings['megapixels']),
+                 margin=float(margin), max_aspect=float(max_aspect))
+    lat = kit.masked_latent(out(crop, 0), out(crop, 1))
+    refined = kit.sample(settings['prompt'], neg, [out(crop, 0)] + list(photos), lat, seed, denoise=strength,
+                         aligned=True, steps=kit.pass_steps(strength))
+    return out(g.add('EADetailPaste', base=base or image, refined=refined, crop_mask=out(crop, 1), info=out(crop, 2),
+                     width=int(ow), height=int(oh)))
+
+
 def build(job, variation=0, status=None):
     """The API prompt for one picture of a job. status: models.status(), to use optional files when present."""
     g = Graph()
@@ -212,20 +227,26 @@ def build(job, variation=0, status=None):
     up = job.get('upscale') == 'seedvr2'
 
     if job.get('product_mode') in ('natural', 'reference'):
-        views = [out(g.add('EAJobImage', job=jid, name=f'view{i + 1}')) for i in range(int(job.get('views') or 1))]
+        n_all = len(job.get('view_shows') or []) or int(job.get('views') or 1)
+        photos = {}
+
+        def photo(i):                                  # the product's i-th photo, loaded once
+            if i not in photos:
+                photos[i] = out(g.add('EAJobImage', job=jid, name=f'view{i + 1}'))
+            return photos[i]
+
+        views = [photo(i) for i in range(int(job.get('views') or 1))]
         first = kit.sample(job['prompt'], neg, views + refs, kit.empty_latent(fw, fh), seed,
                            upsample=bool(job.get('upsample_prompt')))
         det = job.get('detail') or {}
         if det.get('on'):
-            found = sam_find(g, first, job['find'])
-            crop = g.add('EADetailCrop', image=first, mask=found, megapixels=float(det['megapixels']))
-            lat = kit.masked_latent(out(crop, 0), out(crop, 1))
-            refined = kit.sample(det['prompt'], neg, [out(crop, 0)] + views[:int(det.get('views', 1))], lat,
-                                 seed + DETAIL_SEED, denoise=float(det['strength']), aligned=True,
-                                 steps=kit.pass_steps(float(det['strength'])))
-            base = seedvr2(g, first, ow, oh, seed) if up else first
-            final = out(g.add('EADetailPaste', base=base, refined=refined, crop_mask=out(crop, 1), info=out(crop, 2),
-                              width=int(ow), height=int(oh)))
+            final = detail_pass(g, kit, first, job['find'], det, [photo(i) for i in det.get('view_index', range(int(det.get('views', 1))))
+                                                                  if i < n_all], neg, seed + DETAIL_SEED, ow, oh,
+                                base=seedvr2(g, first, ow, oh, seed) if up else first)
+            hilt = det.get('hilt') or {}
+            if hilt.get('on'):
+                final = detail_pass(g, kit, final, hilt['find'], hilt, [photo(i) for i in hilt['view_index'] if i < n_all],
+                                    neg, seed + 2 * DETAIL_SEED, ow, oh, margin=0.15, max_aspect=1.6)
         else:
             final = seedvr2(g, first, ow, oh, seed) if up else first
         extra = {'mask': sam_find(g, final, job['find'])} if job.get('sam') else {}

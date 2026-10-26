@@ -20,7 +20,7 @@ const S = {
   style: null, styles: [],
   custom: false, customText: '', family: null, quality: 'final', variations: 2, seed: '', outLong: 2400, refs: [],
   // how the product goes in: 'natural' (drawn from its photos) or 'exact' (the photo, relit)
-  mode: 'natural', detail: true, detailStrength: 0.5, guide: false, relight: true, seedvr: false,
+  mode: 'natural', detail: true, detailStrength: 0.55, hilt: true, guide: false, relight: true, seedvr: false,
   cards: [],
 };
 const effectiveMode = () => (isWorn() ? 'natural' : S.mode);
@@ -219,7 +219,8 @@ function renderViews() {
       ${v.made === 'model' ? '<span class="badge" title="Made by a model from a photo: check it">Model-made</span>' : ''}
       ${v.cutout ? '' : '<div class="busy">Cutting out…</div>'}
       <figcaption title="${esc(v.label || '')}">${esc(v.label || `Photo ${i + 2}`)}</figcaption>
-      <label class="use"><input type="checkbox" data-use ${v.use === false ? '' : 'checked'}> Use</label>
+      <span class="vrow"><label class="use"><input type="checkbox" data-use ${v.use === false ? '' : 'checked'}> Use</label>
+      ${v.cutout ? `<button class="shows" type="button" data-shows title="What it shows: the whole product, or a close-up of its details. A photo that cuts the product off starts as a close-up.">${v.shows === 'detail' ? 'Close-up' : 'Whole'}</button>` : ''}</span>
       <button class="x" type="button" data-del title="Remove this photo" aria-label="Remove this photo">×</button></figure>`).join('')
     + `<label class="view add">Add photos<br>of other sides<input type="file" accept="image/*" multiple hidden id="fileViews"></label>`;
   $('#fileViews').addEventListener('change', (e) => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) addViews(fs); });
@@ -230,7 +231,14 @@ $('#viewList').addEventListener('change', async (e) => {
   catch (err) { toast(err.message, true); }
 });
 $('#viewList').addEventListener('click', async (e) => {
-  const f = e.target.closest('.view[data-vid]'); if (!f || !e.target.matches('[data-del]')) return;
+  const f = e.target.closest('.view[data-vid]'); if (!f) return;
+  if (e.target.matches('[data-shows]')) {
+    const v = (S.product.views || []).find((x) => x.id === f.dataset.vid);
+    try { S.product = (await api(`/ea/api/products/${S.product.id}/views/${f.dataset.vid}`, { json: { shows: v?.shows === 'detail' ? 'whole' : 'detail' } })).product; renderViews(); updatePrompt(); }
+    catch (err) { toast(err.message, true); }
+    return;
+  }
+  if (!e.target.matches('[data-del]')) return;
   if (!confirm('Remove this photo of the product?')) return;
   try { S.product = (await api(`/ea/api/products/${S.product.id}/views/${f.dataset.vid}`, { method: 'DELETE' })).product; renderViews(); updatePrompt(); }
   catch (err) { toast(err.message, true); }
@@ -407,6 +415,8 @@ function applyMode() {
   $('#chkDetail').disabled = !samReady;
   $('#chkDetail').checked = samReady && S.detail;
   $('#rowDetailStrength').hidden = !(samReady && S.detail);
+  $('#rowHilt').hidden = !(samReady && S.detail && (S.product?.kind || 'instrument') === 'instrument');
+  $('#chkHilt').checked = S.hilt;
   const stageMode = mode === 'exact' ? 'exact' : S.guide && !worn ? 'guide' : 'free';
   stage.setMode(stageMode);
   const wrap = $('#stageWrap');
@@ -425,8 +435,9 @@ function applyMode() {
 }
 segStatic($('#segMode'), S.mode, (v) => { if (isWorn()) return; S.mode = v; store('mode2', v); applyMode(); updatePrompt(); });
 $('#chkDetail').addEventListener('change', (e) => { S.detail = e.target.checked; store('detail', S.detail); applyMode(); });
-$('#inDetail').addEventListener('input', (e) => { S.detailStrength = +e.target.value; $('#outDetail').textContent = e.target.value; store('detailStrength', S.detailStrength); });
+$('#inDetail').addEventListener('input', (e) => { S.detailStrength = +e.target.value; $('#outDetail').textContent = e.target.value; store('detailStrength2', S.detailStrength); });
 $('#chkGuide').addEventListener('change', (e) => { S.guide = e.target.checked; store('guide', S.guide); applyMode(); });
+$('#chkHilt').addEventListener('change', (e) => { S.hilt = e.target.checked; store('hilt', S.hilt); });
 $('#chkRelight').addEventListener('change', (e) => { S.relight = e.target.checked; store('relight', S.relight); });
 $('#chkSeedvr').addEventListener('change', (e) => { S.seedvr = e.target.checked; store('seedvr', S.seedvr); });
 $('#inPlaceText').addEventListener('input', debounce((e) => { S.scene.place_text = e.target.value.trim(); if (S.scene.place_text) syncPlace(''); sceneChanged(); }, 400));
@@ -487,7 +498,7 @@ function request(extra = {}) {
   return {
     product: S.product.id, place: S.place, scene: S.scene, family: S.family, quality: S.quality,
     variations: S.variations, seed: S.seed === '' ? null : +S.seed, output_long: S.outLong,
-    product_mode: effectiveMode(), detail: { on: S.detail, strength: S.detailStrength }, guide: S.guide,
+    product_mode: effectiveMode(), detail: { on: S.detail, strength: S.detailStrength, hilt: S.hilt }, guide: S.guide,
     relight: S.relight, upscale: S.seedvr ? 'seedvr2' : 'none',
     refs: S.refs, prompt: S.custom ? S.customText : null, style: S.style, ...extra,
   };
@@ -551,7 +562,8 @@ function phases(prompt) {
   for (const id of ids) {
     const m = prompt[id].inputs.model;
     const seed = Array.isArray(m) && String(prompt[m[0]]?.inputs?.unet_name || '').startsWith('seedvr2');
-    out[id] = seed ? 'Enlarging' : k++ === 0 ? 'Drawing' : detail ? 'Detail pass' : 'Relighting';
+    const n = seed ? -1 : k++;
+    out[id] = seed ? 'Enlarging' : n === 0 ? 'Drawing' : !detail ? 'Relighting' : n === 1 ? 'Detail pass' : 'Detail pass: the hilt';
   }
   return out;
 }
@@ -593,6 +605,7 @@ function productText(r) {
     const d = r.detail || {};
     return `Drawn by the model from ${n} photo${n === 1 ? '' : 's'}`
       + (d.on ? `, then redrawn against ${d.views === 1 ? 'the photo' : 'them'} in the detail pass (strength ${d.strength})` : ', no detail pass')
+      + (d.on && d.hilt?.on ? `, and its hilt against the close-ups (strength ${d.hilt.strength})` : '')
       + (r.guide ? '; placed by a rough guide' : '')
       + (r.found === false ? '. SAM 3 did not find it again, so there is no parts map.' : '.');
   }
@@ -887,7 +900,8 @@ setInterval(() => { if (!$('#tab-models').hidden || !S.status || FAMILY_ORDER.so
   Object.assign(S.scene, recall('scene', {}));
   S.family = recall('family', null); S.quality = recall('quality', 'final'); S.variations = recall('variations', 2);
   S.mode = recall('mode2', 'natural'); S.outLong = recall('outLong', 2400);
-  S.detail = recall('detail', true); S.detailStrength = recall('detailStrength', 0.5); S.guide = recall('guide', false);
+  S.detail = recall('detail', true); S.detailStrength = recall('detailStrength2', 0.55); S.guide = recall('guide', false);
+  S.hilt = recall('hilt', true);
   S.relight = recall('relight', true); S.seedvr = recall('seedvr', false);
   $('#inDetail').value = S.detailStrength; $('#outDetail').textContent = S.detailStrength;
   $('#chkGuide').checked = S.guide; $('#chkRelight').checked = S.relight;
