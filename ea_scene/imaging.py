@@ -141,6 +141,38 @@ def feather(alpha, sigma):
     return np.clip(ndimage.gaussian_filter(alpha, sigma), 0, 1).astype(np.float32)
 
 
+def low_pass(a, sigma):
+    """A Gaussian-like blur of (H, W) or (H, W, C) at radius `sigma` px, done at a reduced size so that large
+    areas stay quick."""
+    from .util import resize
+    h, w = a.shape[:2]
+    f = max(1.0, sigma / 2.0)
+    if f <= 1.5:
+        return ndimage.gaussian_filter(a, (sigma, sigma) + (0,) * (a.ndim - 2))
+    sw, sh = max(2, int(round(w / f))), max(2, int(round(h / f)))
+    small = resize(a, sw, sh, resample=4)          # PIL BOX: an area average
+    small = ndimage.gaussian_filter(small, (2.0, 2.0) + (0,) * (a.ndim - 2))
+    return resize(small, w, h, resample=2)         # PIL BILINEAR
+
+
+# YCbCr (BT.601, full range): luma and the two colour differences.
+_YCC = np.array([[0.299, 0.587, 0.114], [-0.168736, -0.331264, 0.5], [0.5, -0.418688, -0.081312]], np.float32)
+_RGB = np.linalg.inv(_YCC).astype(np.float32)
+
+
+def keep_colour(base, detail, sigma, amount=1.0):
+    """`detail` with the colour of `base` (both (H, W, 3) in 0..1, the same area): the light and shade, edges and
+    texture stay as in `detail`, while its colour, blurred at `sigma` px, is replaced by `base`'s. Stops a redraw
+    from drifting in colour (a black grip turning green) without undoing what it drew."""
+    if amount <= 0:
+        return detail
+    yb = base @ _YCC.T
+    yd = detail @ _YCC.T
+    shift = low_pass(yb[..., 1:], sigma) - low_pass(yd[..., 1:], sigma)
+    yd[..., 1:] += amount * shift
+    return np.clip(yd @ _RGB.T, 0, 1).astype(np.float32)
+
+
 def white_sweep_alpha(rgb):
     """A classical cut-out for gear shot on a light seamless backdrop (no model needed).
 

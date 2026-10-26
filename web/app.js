@@ -603,9 +603,11 @@ function productText(r) {
   if (m === 'natural') {
     const n = r.views || 1;
     const d = r.detail || {};
+    const missed = (r.passes || []).filter((p) => !p.found).map((p) => `“${p.pass}”`);
     return `Drawn by the model from ${n} photo${n === 1 ? '' : 's'}`
-      + (d.on ? `, then redrawn against ${d.views === 1 ? 'the photo' : 'them'} in the detail pass (strength ${d.strength})` : ', no detail pass')
+      + (d.on ? `, then redrawn against ${d.views === 1 ? 'the photo' : 'the photos'} in the detail pass (strength ${d.strength})` : ', no detail pass')
       + (d.on && d.hilt?.on ? `, and its hilt against the close-ups (strength ${d.hilt.strength})` : '')
+      + (missed.length ? ` (SAM 3 did not find ${missed.join(' or ')}, so that pass changed nothing)` : '')
       + (r.guide ? '; placed by a rough guide' : '')
       + (r.found === false ? '. SAM 3 did not find it again, so there is no parts map.' : '.');
   }

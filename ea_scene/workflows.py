@@ -10,6 +10,8 @@ Exact photo: the model draws only around the photo, which is held as it is (a la
 differential diffusion); a relight pass then lets the scene's light fall on it (the product, a ring around
 it for shadows, a little everywhere else), and EA Finish puts the photo's fine detail back on top.
 """
+import json
+
 from .models import ANGLES_LORA, FAMILIES, SAM3, SEEDVR2
 from . import scene
 
@@ -199,19 +201,23 @@ def seedvr2(g, image, width, height, seed):
     return out(g.add('SeedVR2PostProcessing', images=out(dec), original_resized_images=out(r), color_correction_method='lab'))
 
 
-def detail_pass(g, kit, image, term, settings, photos, neg, seed, ow, oh, base=None, margin=0.1, max_aspect=2.0):
+def detail_pass(g, kit, image, term, settings, photos, neg, seed, ow, oh, base=None, margin=0.1, max_aspect=2.0, log=None):
     """Find `term` in the picture, cut the area around it out and enlarge it, redraw it at part strength with
     the product's photos beside it, and blend it back into `base` (the picture itself if not given) at the
-    output size."""
+    output size, keeping the picture's own colour under the redrawn light, shade and detail. Returns the picture
+    and the passes' log."""
     strength = float(settings['strength'])
     found = sam_find(g, image, term)
+    sizes = kit.F.get('sizes')                       # HiDream-O1 draws at its own sizes only
     crop = g.add('EADetailCrop', image=image, mask=found, megapixels=float(settings['megapixels']),
-                 margin=float(margin), max_aspect=float(max_aspect))
+                 margin=float(margin), max_aspect=float(max_aspect), sizes=json.dumps(sizes) if sizes else '')
     lat = kit.masked_latent(out(crop, 0), out(crop, 1))
     refined = kit.sample(settings['prompt'], neg, [out(crop, 0)] + list(photos), lat, seed, denoise=strength,
                          aligned=True, steps=kit.pass_steps(strength))
-    return out(g.add('EADetailPaste', base=base or image, refined=refined, crop_mask=out(crop, 1), info=out(crop, 2),
-                     width=int(ow), height=int(oh)))
+    extra = {'log': log} if log else {}
+    paste = g.add('EADetailPaste', base=base or image, refined=refined, crop_mask=out(crop, 1), info=out(crop, 2),
+                  width=int(ow), height=int(oh), keep_colour=float(settings.get('keep_colour', 1.0)), label=term, **extra)
+    return out(paste, 0), out(paste, 1)
 
 
 def build(job, variation=0, status=None):
@@ -239,17 +245,20 @@ def build(job, variation=0, status=None):
         first = kit.sample(job['prompt'], neg, views + refs, kit.empty_latent(fw, fh), seed,
                            upsample=bool(job.get('upsample_prompt')))
         det = job.get('detail') or {}
+        log = None
         if det.get('on'):
-            final = detail_pass(g, kit, first, job['find'], det, [photo(i) for i in det.get('view_index', range(int(det.get('views', 1))))
-                                                                  if i < n_all], neg, seed + DETAIL_SEED, ow, oh,
-                                base=seedvr2(g, first, ow, oh, seed) if up else first)
+            final, log = detail_pass(g, kit, first, job['find'], det, [photo(i) for i in det.get('view_index', range(int(det.get('views', 1))))
+                                                                       if i < n_all], neg, seed + DETAIL_SEED, ow, oh,
+                                     base=seedvr2(g, first, ow, oh, seed) if up else first)
             hilt = det.get('hilt') or {}
             if hilt.get('on'):
-                final = detail_pass(g, kit, final, hilt['find'], hilt, [photo(i) for i in hilt['view_index'] if i < n_all],
-                                    neg, seed + 2 * DETAIL_SEED, ow, oh, margin=0.15, max_aspect=1.6)
+                final, log = detail_pass(g, kit, final, hilt['find'], hilt, [photo(i) for i in hilt['view_index'] if i < n_all],
+                                         neg, seed + 2 * DETAIL_SEED, ow, oh, margin=0.15, max_aspect=1.6, log=log)
         else:
             final = seedvr2(g, first, ow, oh, seed) if up else first
         extra = {'mask': sam_find(g, final, job['find'])} if job.get('sam') else {}
+        if log:
+            extra['passes'] = log
         g.add('EAFinish', images=final, job=jid, variation=int(variation), raw=first, **extra)
         return g.nodes
 

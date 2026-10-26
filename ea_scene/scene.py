@@ -82,13 +82,14 @@ APERTURES = [
 ]
 FRAMINGS = [('close', 'Close'), ('half', 'Waist up'), ('full', 'Full figure')]
 
-KIT = ('black HEMA kit: a padded black fencing jacket, black padded gloves, and a black fencing mask '
+# (no "HEMA" here: models print the word on the jacket)
+KIT = ('plain black fencing kit with no lettering: a padded black fencing jacket, black padded gloves, and a black fencing mask '
        'whose mesh hides the whole face')
 
 NEGATIVE = ('face, uncovered face, eyes, text, letters, watermark, logo, signature, a second sword, extra blade, '
             'duplicate gear, bent or broken blade, warped or melted metal, distorted gear, deformed hands, extra fingers, '
             'fused fingers, cartoon, illustration, painting, 3D render, CGI, plastic look, oversaturated colours, '
-            'colour cast, vignette, frame, border')
+            'colour cast, vignette, frame, border, collage, split screen, diptych, two panels, grid of photos, inset picture')
 
 # The parts whose detail matters most, by kind.
 DETAIL_PARTS = {
@@ -259,10 +260,10 @@ def kit_for(kind):
              'mask': 'a black fencing mask whose mesh hides the whole face'}
     keep = [v for k, v in parts.items() if k != kind]
     if len(keep) == 1:
-        return 'black HEMA kit: ' + keep[0]
+        return 'plain black fencing kit with no lettering: ' + keep[0]
     if len(keep) == 2:
-        return 'black HEMA kit: ' + keep[0] + ' and ' + keep[1]
-    return 'black HEMA kit: ' + ', '.join(keep[:-1]) + ', and ' + keep[-1]
+        return 'plain black fencing kit with no lettering: ' + keep[0] + ' and ' + keep[1]
+    return 'plain black fencing kit with no lettering: ' + ', '.join(keep[:-1]) + ', and ' + keep[-1]
 
 
 def _natural_subject(s, noun, kind, views):
@@ -284,7 +285,8 @@ def _natural_subject(s, noun, kind, views):
                 f'hands on the handle, {framing}')
     if pose == 'guard':
         who = 'two fencers, each in ' + KIT + ',' if people == 'pair' else 'a fencer in ' + KIT + ','
-        return f'{who} holding {src} with both gloved hands on the handle in a fencing guard, {framing}'
+        return (f'{who} standing in a fencing guard and holding {src} out in front of the body with both gloved hands on '
+                f'the handle, the blade angled up and away at about 45 degrees so that its whole length shows, {framing}')
     if pose == 'shoulder':
         return f'a fencer in {KIT} resting {src} on the shoulder, one gloved hand on the handle, {framing}'
     if pose == 'palms':
@@ -384,6 +386,7 @@ def natural_prompt(s, product, views=1, refs=0, layout=None):
     light = s.get('light_text') or _pick(LIGHTS, s.get('light', 'overcast'))[2]
     parts = [
         f'Create a photograph of {_natural_subject(s, noun, kind, views)}',
+        'It is one single photograph, taken in one shot, that fills the whole frame',
         describe_pictures(noun, shows),
         f'The setting: {place}',
         'Light: ' + light,

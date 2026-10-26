@@ -25,6 +25,7 @@ FAMILIES = {
         'quality': {'final': {'steps': 16}, 'draft': {'steps': 8}},
         'max_refs': 9,
         'pictures': 10,          # product photos and style references together
+        'first_pass': {'closeups': True},
         'detail_mp': {'final': 4.0, 'draft': 1.5},
     },
     'qwen': {
@@ -43,6 +44,7 @@ FAMILIES = {
         'quality': {'final': {'steps': 40, 'cfg': 4.0}, 'draft': {'steps': 8, 'cfg': 1.0}},
         'max_refs': 2,
         'pictures': 3,
+        'first_pass': {'closeups': True},
         'detail_mp': {'final': 2.0, 'draft': 1.2},
     },
     'hidream': {
@@ -57,6 +59,9 @@ FAMILIES = {
         'quality': {'final': {'steps': 50, 'cfg': 5.0}, 'draft': {'steps': 28, 'cfg': 5.0}},
         'max_refs': 4,
         'pictures': 5,
+        # given several photos of one product, HiDream-O1 lays them out as a collage of panels: its first pass
+        # gets the main photo (and one style reference at most); the close-ups go to the detail passes
+        'first_pass': {'views': 1, 'closeups': False, 'refs': 1},
         'detail_mp': {'final': 4.0, 'draft': 3.0},
     },
 }

@@ -141,7 +141,9 @@ class EAQwenEditEncode:
 class EADetailCrop:
     """The area around the product (where `mask` is), with a margin, no narrower than 1 : max_aspect,
     enlarged to about `megapixels` (at most 3 times) for the model to redraw; and the product's mask in it,
-    grown a little and softened, for where the redraw may change things."""
+    grown a little and softened, for where the redraw may change things. `sizes` (a JSON list of [w, h]): for a
+    model that draws only at certain sizes, the crop takes the nearest of them, with more of the picture around
+    the product if needed."""
     CATEGORY = 'Empirical Armory'
     RETURN_TYPES = ('IMAGE', 'MASK', 'STRING')
     RETURN_NAMES = ('crop', 'crop_mask', 'info')
@@ -152,17 +154,44 @@ class EADetailCrop:
         return {'required': {'image': ('IMAGE',), 'mask': ('MASK',),
                              'megapixels': ('FLOAT', {'default': 2.0, 'min': 0.25, 'max': 8.0, 'step': 0.05})},
                 'optional': {'margin': ('FLOAT', {'default': 0.1, 'min': 0.0, 'max': 1.0, 'step': 0.01}),
-                             'max_aspect': ('FLOAT', {'default': 2.0, 'min': 1.0, 'max': 4.0, 'step': 0.1})}}
+                             'max_aspect': ('FLOAT', {'default': 2.0, 'min': 1.0, 'max': 4.0, 'step': 0.1}),
+                             'sizes': ('STRING', {'default': ''})}}
 
-    def crop(self, image, mask, megapixels, margin=0.1, max_aspect=2.0):
+    @staticmethod
+    def _fixed_size(box, W, H, sizes):
+        """A box around `box` with one of `sizes`' shapes, needing at most 3 times enlargement and inside the
+        picture: the tightest, among shapes near the product's own; else the whole picture, at the size nearest
+        its shape."""
+        x0, y0, x1, y1 = box
+        cw, ch = x1 - x0, y1 - y0
+        best = None
+        for w, h in sizes:
+            bw = max(cw, ch * w / h, w / 3.0)
+            bh = bw * h / w
+            score = bw * bh * (1 + abs(math.log((w / h) / (cw / ch))))
+            if bw <= W + 0.5 and bh <= H + 0.5 and (best is None or score < best[0]):
+                best = (score, bw, bh, w, h)
+        if best is None:
+            w, h = min(sizes, key=lambda s: abs(math.log((s[0] / s[1]) / (W / H))))
+            return (0, 0, W, H), (int(w), int(h))
+        _, bw, bh, w, h = best
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        nx0, nx1 = _span(cx - bw / 2, cx + bw / 2, W)
+        ny0, ny1 = _span(cy - bh / 2, cy + bh / 2, H)
+        return (nx0, ny0, nx1, ny1), (int(w), int(h))
+
+    def crop(self, image, mask, megapixels, margin=0.1, max_aspect=2.0, sizes=''):
         img = image[0].detach().float().cpu().numpy()[..., :3]
         H, W = img.shape[:2]
         m = _first_mask(mask, H, W) > 0.5
         found = bool(m.sum() > 0.0003 * H * W)
+        fixed = [tuple(int(v) for v in s) for s in json.loads(sizes)] if sizes else []
+        ps = 512.0
         if found:
             ys, xs = np.nonzero(m)
             x0, x1, y0, y1 = float(xs.min()), float(xs.max() + 1), float(ys.min()), float(ys.max() + 1)
-            pad = margin * max(x1 - x0, y1 - y0) + 16
+            ps = max(x1 - x0, y1 - y0)
+            pad = margin * ps + 16
             x0, x1, y0, y1 = x0 - pad, x1 + pad, y0 - pad, y1 + pad
             bw, bh = x1 - x0, y1 - y0
             if bw > bh * max_aspect:
@@ -171,18 +200,21 @@ class EADetailCrop:
             elif bh > bw * max_aspect:
                 grow = (bh / max_aspect - bw) / 2
                 x0, x1 = x0 - grow, x1 + grow
+            if fixed:
+                (x0, y0, x1, y1), (tw, th) = self._fixed_size((x0, y0, x1, y1), W, H, fixed)
             x0, x1 = _span(x0, x1, W)
             y0, y1 = _span(y0, y1, H)
         else:
             x0, y0, x1, y1 = 0, 0, min(W, 512), min(H, 512)
         cw, ch = x1 - x0, y1 - y0
-        k = min(3.0, max(1.0, math.sqrt(megapixels * 1024 * 1024 / (cw * ch)))) if found else 1.0
-        tw, th = max(64, int(round(cw * k / 32)) * 32), max(64, int(round(ch * k / 32)) * 32)
+        if not (found and fixed):
+            k = min(3.0, max(1.0, math.sqrt(megapixels * 1024 * 1024 / (cw * ch)))) if found else 1.0
+            tw, th = max(64, int(round(cw * k / 32)) * 32), max(64, int(round(ch * k / 32)) * 32)
         crop = np.clip(resize(img[y0:y1, x0:x1], tw, th), 0, 1)
         if found:
             mm = m[y0:y1, x0:x1]
-            mm = imaging.dilate(mm, max(3, int(0.015 * max(cw, ch))))
-            mm = imaging.feather(mm.astype(np.float32), max(1.5, 0.006 * max(cw, ch)))
+            mm = imaging.dilate(mm, max(3, int(0.018 * ps)))
+            mm = imaging.feather(mm.astype(np.float32), max(1.5, 0.007 * ps))
             mm = np.clip(resize(mm, tw, th, resample=2), 0, 1)
         else:
             mm = np.zeros((th, tw), np.float32)
@@ -191,26 +223,39 @@ class EADetailCrop:
 
 
 class EADetailPaste:
-    """The picture at width x height (resized if it isn't), with the redrawn product blended back in."""
+    """The picture at width x height (resized if it isn't), with the redrawn product blended back in; and a
+    log of the passes so far (what each looked for, whether it was found, and where), kept with the result."""
     CATEGORY = 'Empirical Armory'
-    RETURN_TYPES = ('IMAGE',)
+    RETURN_TYPES = ('IMAGE', 'STRING')
+    RETURN_NAMES = ('image', 'log')
     FUNCTION = 'paste'
 
     @classmethod
     def INPUT_TYPES(cls):
         return {'required': {'base': ('IMAGE',), 'refined': ('IMAGE',), 'crop_mask': ('MASK',), 'info': ('STRING', {'forceInput': True}),
                              'width': ('INT', {'default': 2048, 'min': 64, 'max': 16384}),
-                             'height': ('INT', {'default': 2048, 'min': 64, 'max': 16384})}}
+                             'height': ('INT', {'default': 2048, 'min': 64, 'max': 16384})},
+                'optional': {'keep_colour': ('FLOAT', {'default': 1.0, 'min': 0.0, 'max': 1.0, 'step': 0.05,
+                                                       'tooltip': 'How much of the picture\'s own colour the redrawn area keeps '
+                                                                  '(its light, shade and detail stay as redrawn).'}),
+                             'label': ('STRING', {'default': ''}),
+                             'log': ('STRING', {'forceInput': True})}}
 
-    def paste(self, base, refined, crop_mask, info, width, height):
+    def paste(self, base, refined, crop_mask, info, width, height, keep_colour=1.0, label='', log=None):
         out = base[0].detach().float().cpu().numpy()[..., :3]
         if out.shape[:2] != (height, width):
             out = np.clip(resize(out, width, height), 0, 1)
         else:
             out = out.copy()
         meta = json.loads(info)
+        try:
+            entries = json.loads(log) if log else []
+        except ValueError:
+            entries = []
+        entries.append({'pass': label, 'found': bool(meta.get('found')), 'box': meta.get('box'), 'size': meta.get('size'),
+                        'frame': meta.get('frame'), 'keep_colour': float(keep_colour)})
         if not meta.get('found'):
-            return (_image_tensor(out),)
+            return (_image_tensor(out), json.dumps(entries))
         x0, y0, x1, y1 = meta['box']
         FW, FH = meta['frame']
         fx, fy = width / FW, height / FH
@@ -220,8 +265,10 @@ class EADetailPaste:
         r = np.clip(resize(refined[0].detach().float().cpu().numpy()[..., :3], bw, bh), 0, 1)
         mk = _first_mask(crop_mask, bh, bw)[..., None]
         region = out[Y0:Y1, X0:X1]
+        if keep_colour > 0:
+            r = imaging.keep_colour(region, r, sigma=max(3.0, 0.01 * max(bw, bh)), amount=float(keep_colour))
         out[Y0:Y1, X0:X1] = region * (1 - mk) + r * mk
-        return (_image_tensor(out),)
+        return (_image_tensor(out), json.dumps(entries))
 
 
 class EAFinish:
@@ -234,9 +281,9 @@ class EAFinish:
     def INPUT_TYPES(cls):
         return {'required': {'images': ('IMAGE',), 'job': ('STRING', {'default': ''}),
                              'variation': ('INT', {'default': 0, 'min': 0, 'max': 1000})},
-                'optional': {'raw': ('IMAGE',), 'mask': ('MASK',)}}
+                'optional': {'raw': ('IMAGE',), 'mask': ('MASK',), 'passes': ('STRING', {'forceInput': True})}}
 
-    def finish(self, images, job, variation=0, raw=None, mask=None):
+    def finish(self, images, job, variation=0, raw=None, mask=None, passes=None):
         arr = images.detach().float().cpu().numpy()
         raws = None if raw is None else raw.detach().float().cpu().numpy()
         masks = None
@@ -248,7 +295,7 @@ class EAFinish:
         for i in range(arr.shape[0]):
             r = raws[min(i, raws.shape[0] - 1)][..., :3] if raws is not None else None
             m = masks[min(i, masks.shape[0] - 1)] if masks is not None and masks.shape[0] else None
-            results.append(jobs.finish(job, arr[i][..., :3], index=variation + i, raw=r, mask=m))
+            results.append(jobs.finish(job, arr[i][..., :3], index=variation + i, raw=r, mask=m, passes=passes))
         return {'ui': {'ea_results': results}}
 
 

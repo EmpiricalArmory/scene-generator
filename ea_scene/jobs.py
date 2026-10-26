@@ -9,6 +9,7 @@ data/results/<day>/  for each picture: <name>.png (final), <name>-parts.png (a p
                      by part), <name>-raw.png (the model's first picture, before the detail or relight
                      pass), <name>.json (how it was made)
 """
+import json
 import os
 import time
 
@@ -120,9 +121,15 @@ def create(req):
         view_shows = [shows for _, shows in refset]
         for i, (path, _) in enumerate(refset):
             save_png(os.path.join(d, f'view{i + 1}.png'), _fit_mp(load_rgb(path), 1.0), compress=3)
-        style_slots = min(len(style_ids), max(1, max_pics // 3)) if style_ids else 0
-        n_views = max(1, min(len(refset), max_pics - style_slots))
-        n_style = min(len(style_ids), max_pics - n_views)
+        first = F.get('first_pass') or {}
+        style_cap = min(first.get('refs', max_pics), max(1, max_pics // 3))
+        style_slots = min(len(style_ids), style_cap) if style_ids else 0
+        cap = max_pics - style_slots
+        if not first.get('closeups', True):
+            cap = min(cap, max(1, sum(1 for v in view_shows if v == 'whole')))
+        cap = min(cap, first.get('views', cap))
+        n_views = max(1, min(len(refset), cap))
+        n_style = min(len(style_ids), max_pics - n_views, first.get('refs', max_pics))
         if req.get('guide'):
             _, fg, alpha, _ = products.layers(p['id'])
             box, angle = guide_box(fg, alpha, place, fw, fh)
@@ -165,6 +172,7 @@ def create(req):
         'strength': float(min(0.9, max(0.15, float(det.get('strength', DETAIL_STRENGTH))))),
         'megapixels': F['detail_mp']['draft' if quality == 'draft' else 'final'],
         'views': k, 'view_index': list(range(k)),
+        'keep_colour': float(min(1.0, max(0.0, float(det.get('keep_colour', 1.0))))),
     }
     detail['prompt'] = scene.detail_prompt(p, view_shows[:k])
     term = products.hilt_term(p)
@@ -173,6 +181,7 @@ def create(req):
         # a closer look at a sword's hilt: close-ups first beside it
         order = [i for i, v in enumerate(view_shows) if v == 'detail'] + [i for i, v in enumerate(view_shows) if v != 'detail']
         hilt.update(find=term, strength=float(min(0.85, detail['strength'] + 0.1)), megapixels=detail['megapixels'],
+                    keep_colour=detail['keep_colour'],
                     view_index=order[:k], prompt=scene.hilt_prompt(p, [view_shows[i] for i in order[:k]]))
     detail['hilt'] = hilt
     relight = mode == 'exact' and bool(req.get('relight', True))
@@ -226,7 +235,7 @@ def _product_layers(pid):
     return _CACHE[key]
 
 
-def finish(jid, generated, index=0, raw=None, mask=None):
+def finish(jid, generated, index=0, raw=None, mask=None, passes=None):
     """Save a finished picture, its parts map and how it was made.
 
     natural: `generated` is the final picture; `mask` (SAM 3's find on it) makes the parts map.
@@ -273,6 +282,11 @@ def finish(jid, generated, index=0, raw=None, mask=None):
     info['output'] = [int(ow), int(oh)]
     info.update({'job': jid, 'seed': j['seed'] + index, 'variation': index, 'result': name, 'day': day,
                  'finished': now_iso(), 'finish_seconds': round(time.time() - t0, 2), 'found': parts is not None})
+    if passes:
+        try:
+            info['passes'] = json.loads(passes)
+        except ValueError:
+            pass
     write_json(os.path.join(out_dir, name + '.json'), info)
     rel = f'{day}/{name}'
     j['results'].append(rel)
